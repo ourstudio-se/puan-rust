@@ -1,6 +1,11 @@
+use std::hash::Hash;
+use std::{collections::HashMap};
+use std::fmt::Display;
+use itertools::Itertools;
 use itertools::iproduct;
 use std::cmp;
 
+#[derive(Hash)]
 struct GeLineq {
     coeffs : Vec<i64>,
     bounds : Vec<(i64, i64)>,
@@ -51,7 +56,6 @@ impl GeLineq {
     }
 
     pub fn merge_disj(ge_lineq1: &GeLineq, ge_lineq2: &GeLineq) -> Option<GeLineq> {
-        
         if ge_lineq1._eqmin() + ge_lineq1.bias == -1 {
             let mut equal_indices : Vec<(usize, usize)> = Vec::new();
             for i in 0..ge_lineq1.index.len(){
@@ -169,7 +173,173 @@ impl GeLineq {
         None
         
     }
+}
 
+fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
+    let mut candidates: Vec<[u32;2]> = pairs.to_vec();
+    let mut solution: Vec<[u32;2]> = Vec::new();
+
+    while candidates.len() > 0 {
+        let selected: [u32;2] = candidates.pop().expect("empty candidates in select_check function");
+        candidates = candidates.iter().filter(
+            |candidate| {
+                iproduct!(selected.iter(), candidate.iter()).map(
+                    |comb| {
+                        *comb.0!=*comb.1
+                    }
+                ).all(|x: bool| x)
+            }
+        ).map(|x| *x).collect();
+        solution.push(selected);
+    }
+
+    return solution;
+}
+
+#[derive(Copy)]
+struct Variable {
+    id      : u32,
+    bounds  : (i64, i64)
+}
+
+impl Clone for Variable {
+    fn clone(&self) -> Self {
+        return Variable {
+            id : self.id,
+            bounds: self.bounds
+        }
+    }
+}
+
+impl Variable {
+    fn to_lineq_neg(&self) -> GeLineq {
+        return GeLineq {
+            coeffs: vec![-1],
+            bias: 0,
+            bounds: vec![(0,1)],
+            index: vec![self.id]
+        }
+    }
+}
+
+struct AtLeast {
+    ids     : Vec<u32>,
+    value   : i64,
+    sign    : bool
+}
+
+impl AtLeast {
+
+    fn size(&self) -> usize {
+        return self.ids.len();
+    }
+
+    fn to_lineq(&self, variable_bounds: Vec<(i64,i64)>) -> GeLineq {
+        return GeLineq {
+            coeffs: vec![match self.sign {true => 1, false => -1}; self.size()],
+            bias: -1*i64::from(self.value),
+            bounds: variable_bounds,
+            index: self.ids.to_vec()
+        }
+    }
+}
+
+impl Display for AtLeast {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({})({}>={})", match self.sign {true => "+", false => "-"}, self.ids.iter().map(|v| v.to_string()).collect::<Vec<String>>().join(","), self.value)
+    }
+}
+
+struct Statement {
+    variable    : Variable,
+    expression  : Option<AtLeast>
+}
+
+struct Theory {
+    id : String,
+    statements : Vec<Statement>
+}
+
+impl Theory {
+
+    // top node/id, i.e the id which no one has as a child
+    fn top(&self) -> &u32 {
+        let mut is_child : bool = true;
+        let mut id_curr : &u32 = &self.statements.first().expect("theory is empty").variable.id;
+        let mut counter = 0;
+        while is_child {
+            if counter >= self.statements.len() {
+                panic!("theory has circular statement references! (a -> b -> c -> a)")
+            }
+            for statement in self.statements.iter() {
+                is_child = match &statement.expression {
+                    Some(a) => a.ids.contains(id_curr),
+                    None => false
+                };
+                if is_child {
+                    id_curr = &statement.variable.id;
+                    break;
+                }
+            }
+            counter += 1;
+        }
+        return id_curr;
+    }
+
+    fn bottoms(&self) -> Vec<&u32> {
+        return self.statements.iter().filter_map(
+            |statement| {
+                match &statement.expression {
+                    Some(_) => None,
+                    None => Some(&statement.variable.id)
+                }
+            }
+        ).collect()
+    }
+
+    // Variable hash map from variable id to variable
+    fn variable_hm(&self) -> HashMap<u32, Variable> {
+        return self.statements.iter().map(|statement: &Statement| {
+            (statement.variable.id, statement.variable)
+        }).collect();
+    }
+
+    fn statement_hm(&self) -> HashMap<u32, &Statement> {
+        return self.statements.iter().map(|statement: &Statement| {
+            (statement.variable.id, statement)
+        }).collect();
+    }
+
+    fn to_lineqs(&self) -> Vec<GeLineq> {
+        let var_hm: HashMap<u32, Variable> = self.variable_hm();
+        return self.statements.iter().filter_map(
+            |statement: &Statement| match &statement.expression {
+                Some(a) => GeLineq::merge_disj(
+                    &statement.variable.to_lineq_neg(),
+                    &a.to_lineq(
+                        a.ids.iter().map(
+                            |id| {
+                                var_hm.get(id).expect(
+                                    &format!(
+                                        "got id `{id}` in expression {a} that was not in theory"
+                                    )
+                                ).bounds
+                            }
+                        ).collect()
+                    )
+                ),
+                None => None
+            }
+        ).collect();
+    }
+
+    // fn to_lineqs_red(&self) -> Vec<GeLineq> {
+    //     let state_hm: HashMap<u32, &Statement> = self.statement_hm();
+    //     let queue: Vec<u32> = vec![*self.top()];
+    //     while queue.len() > 0 {
+    //         current_statement : &Statement = queue
+    //     }
+    // }
 }
 
 #[cfg(test)]
@@ -672,4 +842,328 @@ mod tests {
             assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
         }
     }
+
+    fn test_select_check_fn() {
+        assert_eq!(
+            select_check(vec![[0,1],[1,2],[3,4],[5,6]]),
+            vec![[5,6],[3,4],[1,2]]
+        );
+        
+        let empty : Vec<[u32;2]> = Vec::new();
+        assert_eq!(
+            select_check(vec![]),
+            empty
+        );
+
+        assert_eq!(
+            select_check(vec![[0,0],[1,1]]),
+            vec![[1,1],[0,0]]
+        );
+
+        assert_eq!(
+            select_check(vec![[1,2],[3,4],[2,5],[3,6]]),
+            vec![[3,6],[2,5]]
+        );
+
+        assert_eq!(
+            select_check(vec![[3,1],[2,0],[0,1]]),
+            vec![[0,1]]
+        );
+    }
+
+    #[test]
+    fn test_theory_top_ok() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            sign: true,
+                            value: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            sign: false,
+                            value: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            sign: true,
+                            value: 3
+                        }
+                    )
+                },
+            ]
+        };
+        assert_eq!(*t.top(), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_theory_top_has_circular_references() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1],
+                            sign: true,
+                            value: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![2],
+                            sign: false,
+                            value: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![0],
+                            sign: true,
+                            value: 3
+                        }
+                    )
+                },
+            ]
+        };
+        t.top();
+    }
+
+    #[test]
+    fn test_theory_top_should_not_panic() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![2],
+                            sign: false,
+                            value: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1],
+                            sign: true,
+                            value: 3
+                        }
+                    )
+                },
+            ]
+        };
+        t.top();
+    }
+
+    #[test]
+    fn test_theory_variable_hm_should_be_correct() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            sign: true,
+                            value: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            sign: false,
+                            value: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            sign: true,
+                            value: 3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let vm = t.variable_hm();
+        let expected_keys : Vec<u32> = vec![0,1,2,3,4,5,6,7];
+        let test_result = expected_keys.iter().map(|k| vm.contains_key(k)).all(|k| k);
+        assert!(test_result);
+    }
+    
+    #[test]
+    fn test_theory_variable_hm_have_id_duplicates() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            sign: true,
+                            value: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let vm = t.variable_hm();
+        let expected_keys : Vec<u32> = vec![0,1,2];
+        let test_result = expected_keys.iter().map(|k| vm.contains_key(k)).all(|k| k);
+        assert!(test_result);
+    }
+    
+    #[test]
+    fn test_theory_to_lineqs() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            sign: true,
+                            value: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            sign: false,
+                            value: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            sign: true,
+                            value: 3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let actual: Vec<GeLineq> = t.to_lineqs();
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-1,1,1],
+                index: vec![0,1,2]
+            },
+            GeLineq {
+                bias: 2,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-1,-1,-1],
+                index: vec![1,3,4]
+            },
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![-3,1,1,1],
+                index: vec![2,5,6,7]
+            },
+        ];
+        let test_ok = actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias);
+        assert!(test_ok);
+    }
+
 }
