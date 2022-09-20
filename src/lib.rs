@@ -1,3 +1,7 @@
+//! # Puan rust
+//! 
+//! Puan algorithms implemented in Rust. 
+
 use std::hash::Hash;
 use std::{collections::HashMap};
 use std::fmt::Display;
@@ -5,16 +9,19 @@ use itertools::Itertools;
 use itertools::iproduct;
 use std::cmp;
 
+/// Data structure for linear inequalities on the following form
+/// $$ c_0 * v_0 + c_1 * v_1 + ... + c_n * v_n + bias \ge 0 $$ for $ c \in $ `coeffs` and $ v $ are variables which can take on the values
+/// given by `bounds`. `Indices` represents the global indices of the variables. Note that the length of `coeffs`, `bounds` and `indices` must be the same.
 #[derive(Hash)]
-struct GeLineq {
-    coeffs : Vec<i64>,
-    bounds : Vec<(i64, i64)>,
-    bias   : i64,
-    index  : Vec<u32>
+pub struct GeLineq {
+    pub coeffs  : Vec<i64>,
+    pub bounds  : Vec<(i64, i64)>,
+    pub bias    : i64,
+    pub indices : Vec<u32>
 }
 
 impl GeLineq {
-
+    
     fn _eqmax(&self) -> i64 {
         let mut res : i64 = 0;
         for i in 0..self.coeffs.len() {
@@ -26,7 +33,7 @@ impl GeLineq {
         }
         return res;
     }
-
+    
     fn _eqmin(&self) -> i64 {
         let mut res : i64 = 0;
         for i in 0..self.coeffs.len() {
@@ -38,29 +45,63 @@ impl GeLineq {
         }
         return res;
     }
-
+    
     fn eqbounds(&self) -> (i64, i64) {
         return (self._eqmin(), self._eqmax());
     }
-
+    
     fn satisfied(&self, variables: Vec<(u32, i64)>) -> bool{
         let mut res = 0;
         for i in 0..variables.len() {
             for j in 0..self.coeffs.len() {
-                if self.index[j] == variables[i].0 {
+                if self.indices[j] == variables[i].0 {
                     res = res + self.coeffs[j]*variables[i].1;
                 }
             }
         }
         return res + self.bias >= 0;
     }
-
+    
+    /// Takes two GeLineqs and merge those into one GeLineq under the condition that one of the GeLineqs must be satisfied.
+    /// If it's not possible to merge the inequalities, i.e. it's impossible to preserve the logic, `none` is returned.
+    /// 
+    /// # Example:
+    /// 
+    /// If atleast one of the two linear inequalities $ x + y - 1 \ge 0 $ where $ x, y \in \\{0, 1 \\}$ and $ a + b - 1 \ge 0 $ where $ a, b \in \\{0, 1\\}$ must hold,
+    /// then they can be merged into one linear inequality as $ x + y + a + b - 1 \ge 0$ where $ x, y, a, b \in \\{0, 1\\}$. Note that the logic is preserved,
+    /// i.e the merged inequality will be valid if at least one of the two original inequalities are valid. Likewise, the merged constraint will not be valid if none of the original inequalites are.
+    /// ```
+    /// use puanrs::GeLineq;
+    /// let ge_lineq1:GeLineq = GeLineq {
+    ///    coeffs  : vec![1, 1],
+    ///    bounds  : vec![(0, 1), (0, 1)],
+    ///    bias    : -1,
+    ///    indices : vec![1, 2]
+    ///    };
+    /// let ge_lineq2: GeLineq = GeLineq {
+    ///    coeffs  : vec![1, 1],
+    ///    bounds  : vec![(0, 1), (0, 1)],
+    ///    bias    : -1,
+    ///    indices : vec![3, 4]
+    ///  };
+    /// let expected: GeLineq = GeLineq {
+    ///    coeffs  : vec![1, 1, 1, 1],
+    ///    bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+    ///    bias    : -1,
+    ///    indices : vec![1, 2, 3, 4]
+    ///  };
+    /// let actual = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
+    /// assert_eq!(actual.as_ref().expect("Not possible to merge lineqs").coeffs, expected.coeffs);
+    /// assert_eq!(actual.as_ref().expect("Not possible to merge lineqs").bounds, expected.bounds);
+    /// assert_eq!(actual.as_ref().expect("Not possible to merge lineqs").bias, expected.bias);
+    /// assert_eq!(actual.as_ref().expect("Not possible to merge lineqs").indices, expected.indices);
+    /// ```
     pub fn merge_disj(ge_lineq1: &GeLineq, ge_lineq2: &GeLineq) -> Option<GeLineq> {
         if ge_lineq1._eqmin() + ge_lineq1.bias == -1 {
             let mut equal_indices : Vec<(usize, usize)> = Vec::new();
-            for i in 0..ge_lineq1.index.len(){
-                for j in 0..ge_lineq2.index.len(){
-                    if ge_lineq1.index[i]==ge_lineq2.index[j] {
+            for i in 0..ge_lineq1.indices.len(){
+                for j in 0..ge_lineq2.indices.len(){
+                    if ge_lineq1.indices[i]==ge_lineq2.indices[j] {
                         equal_indices.push((i, j));
                     }
                 }
@@ -70,7 +111,7 @@ impl GeLineq {
             let mut equal_index_pointer: usize = 0;
             let mut corrector: i64 = 0;
             let mut new_bounds : Vec<(i64, i64)> = Vec::with_capacity(n);
-            let mut new_index : Vec<u32> = Vec::with_capacity(n);
+            let mut new_indices : Vec<u32> = Vec::with_capacity(n);
             
             for i in 0..ge_lineq1.coeffs.len() {
                 if equal_index_pointer < equal_indices.len() && equal_indices[equal_index_pointer].0 == i {
@@ -78,32 +119,32 @@ impl GeLineq {
                     equal_index_pointer = equal_index_pointer + 1;
                 }
                 new_coeffs.push(-ge_lineq1.coeffs[i]*(ge_lineq2._eqmin() + ge_lineq2.bias) + corrector);
-                new_index.push(ge_lineq1.index[i]);
+                new_indices.push(ge_lineq1.indices[i]);
                 new_bounds.push(ge_lineq1.bounds[i]);
                 corrector = 0;
             }
-            let mut skip_equal_index = 0;
+            let mut skip_equal_index = false;
             for i in 0..ge_lineq2.coeffs.len(){
                 for j in 0..equal_indices.len(){
                     if equal_indices[j].1 == i {
                         equal_indices.remove(j);
-                        skip_equal_index = 1;
+                        skip_equal_index = true;
                         break;
                     }
                 }
-                if skip_equal_index < 1 {
+                if !skip_equal_index {
                     new_coeffs.push(ge_lineq2.coeffs[i]);
-                    new_index.push(ge_lineq2.index[i]);
+                    new_indices.push(ge_lineq2.indices[i]);
                     new_bounds.push(ge_lineq2.bounds[i]);
                 }
-                skip_equal_index = 0;
+                skip_equal_index = false;
             }
             return Some(
                 GeLineq {
                     coeffs: new_coeffs,
                     bounds: new_bounds,
                     bias: ge_lineq1._eqmin()*(ge_lineq2._eqmin() + ge_lineq2.bias)+ge_lineq2.bias,
-                    index: new_index
+                    indices: new_indices
                 }
             );  
         } else if ge_lineq2._eqmin() + ge_lineq2.bias == -1 {
@@ -114,13 +155,15 @@ impl GeLineq {
         
     }
 
+    /// Takes two GeLineqs and merge those into one GeLineq under the condition that both of the GeLineqs must be valid.
+    /// If it's not possible to merge the inequalities, i.e. it's impossible to preserve the logic, `none` is returned.
     pub fn merge_conj(ge_lineq1: &GeLineq, ge_lineq2: &GeLineq) -> Option<GeLineq> {
     
         if ge_lineq1._eqmax() + ge_lineq1.bias == 0 {
             let mut equal_indices : Vec<(usize, usize)> = Vec::new();
-            for i in 0..ge_lineq1.index.len(){
-                for j in 0..ge_lineq2.index.len(){
-                    if ge_lineq1.index[i]==ge_lineq2.index[j] {
+            for i in 0..ge_lineq1.indices.len(){
+                for j in 0..ge_lineq2.indices.len(){
+                    if ge_lineq1.indices[i]==ge_lineq2.indices[j] {
                         equal_indices.push((i, j));
                     }
                 }
@@ -130,7 +173,7 @@ impl GeLineq {
             let mut equal_index_pointer: usize = 0;
             let mut corrector: i64 = 0;
             let mut new_bounds : Vec<(i64, i64)> = Vec::with_capacity(n);
-            let mut new_index : Vec<u32> = Vec::with_capacity(n);
+            let mut new_indices : Vec<u32> = Vec::with_capacity(n);
             
             for i in 0..ge_lineq1.coeffs.len() {
                 if equal_index_pointer < equal_indices.len() && equal_indices[equal_index_pointer].0 == i {
@@ -138,32 +181,32 @@ impl GeLineq {
                     equal_index_pointer = equal_index_pointer + 1;
                 }
                 new_coeffs.push(ge_lineq1.coeffs[i]*(cmp::max(ge_lineq2._eqmax().abs(), ge_lineq2._eqmin().abs())+1) + corrector);
-                new_index.push(ge_lineq1.index[i]);
+                new_indices.push(ge_lineq1.indices[i]);
                 new_bounds.push(ge_lineq1.bounds[i]);
                 corrector = 0;
             }
-            let mut skip_equal_index = 0;
+            let mut skip_equal_index = false;
             for i in 0..ge_lineq2.coeffs.len(){
                 for j in 0..equal_indices.len(){
                     if equal_indices[j].1 == i {
                         equal_indices.remove(j);
-                        skip_equal_index = 1;
+                        skip_equal_index = true;
                         break;
                     }
                 }
-                if skip_equal_index < 1 {
+                if !skip_equal_index {
                     new_coeffs.push(ge_lineq2.coeffs[i]);
-                    new_index.push(ge_lineq2.index[i]);
+                    new_indices.push(ge_lineq2.indices[i]);
                     new_bounds.push(ge_lineq2.bounds[i]);
                 }
-                skip_equal_index = 0;
+                skip_equal_index = false;
             }
             return Some(
                 GeLineq {
                     coeffs: new_coeffs,
                     bounds: new_bounds,
                     bias: ge_lineq1.bias*(cmp::max(ge_lineq2._eqmax().abs(), ge_lineq2._eqmin().abs())+1) + ge_lineq2.bias - cmp::max(ge_lineq2._eqmin() + ge_lineq2.bias, 0),
-                    index: new_index
+                    indices: new_indices
                 }
             );  
         } else if ge_lineq2._eqmax() + ge_lineq2.bias == 0 {
@@ -217,7 +260,7 @@ impl Variable {
             coeffs: vec![-1],
             bias: 0,
             bounds: vec![(0,1)],
-            index: vec![self.id]
+            indices: vec![self.id]
         }
     }
 }
@@ -239,7 +282,7 @@ impl AtLeast {
             coeffs: vec![match self.sign {true => 1, false => -1}; self.size()],
             bias: -1*i64::from(self.value),
             bounds: variable_bounds,
-            index: self.ids.to_vec()
+            indices: self.ids.to_vec()
         }
     }
 }
@@ -350,16 +393,16 @@ mod tests {
     fn test_logic(){
         // Disjunction merge between 1-1
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1],
-            bounds : vec![(0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 6]
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 6]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l) in iproduct!(0..2, 0..2, 0..2, 0..2){
@@ -368,16 +411,16 @@ mod tests {
         }
         // Disjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![1, 2, 3, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![1, 2, 3, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l) in iproduct!(0..2, 0..2, 0..2, 0..2){
@@ -386,16 +429,16 @@ mod tests {
         }
         // Disjunction merge between 1-1
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1],
-            bounds : vec![(0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![5, 6]
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![5, 6]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
@@ -404,16 +447,16 @@ mod tests {
         }
         // Disjunction merge between 1-2
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 3,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 3,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -422,16 +465,16 @@ mod tests {
         }
         // Disjunction merge between 1-3
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -440,16 +483,16 @@ mod tests {
         }
         // Disjunction merge between 1-4
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -4,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -4,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -458,16 +501,16 @@ mod tests {
         }
         // Disjunction merge between 1-5
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -2,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -476,16 +519,16 @@ mod tests {
         }
         // Disjunction merge between 1-6
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -494,16 +537,16 @@ mod tests {
         }
         // Disjunction merge between 2-2
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 3,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 3,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -512,16 +555,16 @@ mod tests {
         }
         // Disjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -530,16 +573,16 @@ mod tests {
         }
         // Disjunction merge between 2-4
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -4,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -4,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -548,16 +591,16 @@ mod tests {
         }
         // Disjunction merge between 2-5
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -2,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -566,16 +609,16 @@ mod tests {
         }
         // Disjunction merge between 2-6
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -584,16 +627,16 @@ mod tests {
         }
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -3,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -3,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -3,
-            index  : vec![1, 0, 4]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -3,
+            indices : vec![1, 0, 4]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
@@ -602,16 +645,16 @@ mod tests {
         }
         // Conjunction merge between 4-3
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -3,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -3,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -620,16 +663,16 @@ mod tests {
         }
         // Conjunction merge between 1-4
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -4,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -4,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -638,16 +681,16 @@ mod tests {
         }
         // Conjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -655,16 +698,16 @@ mod tests {
         }
         // Conjunction merge between 2-4
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -4,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -4,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -672,16 +715,16 @@ mod tests {
         }
         // Conjunction merge between 3-3
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -689,16 +732,16 @@ mod tests {
         }
         // Conjunction merge between 3-4
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -4,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -4,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -706,16 +749,16 @@ mod tests {
         }
         // Conjunction merge between 3-5
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -2,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -724,16 +767,16 @@ mod tests {
         }
         // Conjunction merge between 3-6
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 0,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![-1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -741,16 +784,16 @@ mod tests {
         }
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -3,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -3,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -4,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -4,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -758,16 +801,16 @@ mod tests {
         }
         // Conjunction merge between 4-5
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -3,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -3,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -2,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -775,16 +818,16 @@ mod tests {
         }
         // Conjunction merge between 4-6
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : -3,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -3,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![-1, -1, -1, -1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : 2,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![-1, -1, -1, -1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : 2,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -792,16 +835,16 @@ mod tests {
         }
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1)],
-            bias   : 3,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 3,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -4,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -4,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
@@ -809,16 +852,16 @@ mod tests {
         }
         // Disjunction merge, special case
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(-2, -1), (2, 3), (2, 3)],
-            bias   : -3,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(-2, -1), (2, 3), (2, 3)],
+            bias    : -3,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(-2..0, 2..4, 2..4, 0..2, 0..2, 0..2, 0..2){
@@ -826,16 +869,16 @@ mod tests {
         }
         // Conjunction merge, special case
         let ge_lineq1:GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1],
-            bounds : vec![(-2, -1), (2, 3), (2, 3)],
-            bias   : -5,
-            index  : vec![1, 2, 3]
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(-2, -1), (2, 3), (2, 3)],
+            bias    : -5,
+            indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
-            coeffs : vec![1, 1, 1, 1],
-            bounds : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-            bias   : -1,
-            index  : vec![5, 6, 7, 8]
+            coeffs  : vec![1, 1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![5, 6, 7, 8]
         };
         let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
         for (i,j,k,l,m, n, o) in iproduct!(-2..0, 2..4, 2..4, 0..2, 0..2, 0..2, 0..2){
@@ -1147,19 +1190,19 @@ mod tests {
                 bias: 0,
                 bounds: vec![(0,1),(0,1),(0,1)],
                 coeffs: vec![-1,1,1],
-                index: vec![0,1,2]
+                indices: vec![0,1,2]
             },
             GeLineq {
                 bias: 2,
                 bounds: vec![(0,1),(0,1),(0,1)],
                 coeffs: vec![-1,-1,-1],
-                index: vec![1,3,4]
+                indices: vec![1,3,4]
             },
             GeLineq {
                 bias: 0,
                 bounds: vec![(0,1),(0,1),(0,1),(0,1)],
                 coeffs: vec![-3,1,1,1],
-                index: vec![2,5,6,7]
+                indices: vec![2,5,6,7]
             },
         ];
         let test_ok = actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias);
