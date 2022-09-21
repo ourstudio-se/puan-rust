@@ -216,6 +216,65 @@ impl GeLineq {
         None
         
     }
+    pub fn substitution(main_gelineq: &GeLineq, variable_index: u32, sub_gelineq: &GeLineq) -> Option<GeLineq> {
+        let mut equal_indices : Vec<(usize, usize)> = Vec::new();
+            for i in 0..main_gelineq.indices.len(){
+                for j in 0..sub_gelineq.indices.len(){
+                    if main_gelineq.indices[i]==sub_gelineq.indices[j] {
+                        equal_indices.push((i, j));
+                    }
+                }
+            }
+            let n: usize = main_gelineq.coeffs.len() + sub_gelineq.coeffs.len() - equal_indices.len() - 1;
+            let mut new_coeffs : Vec<i64> = Vec::with_capacity(n);
+            let mut equal_index_pointer: usize = 0;
+            let mut corrector: i64 = 0;
+            let mut new_bounds : Vec<(i64, i64)> = Vec::with_capacity(n);
+            let mut new_indices : Vec<u32> = Vec::with_capacity(n);
+            
+            for i in 0..main_gelineq.coeffs.len() {
+                if main_gelineq.indices[i] == variable_index{
+                    continue;
+                }
+                if equal_index_pointer < equal_indices.len() && equal_indices[equal_index_pointer].0 == i {
+                    corrector = sub_gelineq.coeffs[equal_indices[equal_index_pointer].1];
+                    equal_index_pointer = equal_index_pointer + 1;
+                }
+                if sub_gelineq.bias < 0 {
+                    new_coeffs.push(main_gelineq.coeffs[i]*sub_gelineq._eqmax() + corrector);
+                } else {
+                    new_coeffs.push(main_gelineq.coeffs[i]*sub_gelineq._eqmin().abs() + corrector);
+                }
+                new_indices.push(main_gelineq.indices[i]);
+                new_bounds.push(main_gelineq.bounds[i]);
+                corrector = 0;
+            }
+            let mut skip_equal_index = 0;
+            for i in 0..sub_gelineq.coeffs.len(){
+                for j in 0..equal_indices.len(){
+                    if equal_indices[j].1 == i {
+                        equal_indices.remove(j);
+                        skip_equal_index = 1;
+                        break;
+                    }
+                }
+                if skip_equal_index < 1 {
+                    new_coeffs.push(sub_gelineq.coeffs[i]);
+                    new_indices.push(sub_gelineq.indices[i]);
+                    new_bounds.push(sub_gelineq.bounds[i]);
+                }
+                skip_equal_index = 0;
+            }
+            let new_bias = if sub_gelineq.bias < 0 {main_gelineq.bias*sub_gelineq._eqmax() + sub_gelineq._eqmax() + sub_gelineq.bias} else {main_gelineq.bias*sub_gelineq._eqmin().abs() + sub_gelineq._eqmin().abs() + sub_gelineq.bias};
+            return Some(
+                GeLineq {
+                    coeffs: new_coeffs,
+                    bounds: new_bounds,
+                    bias: new_bias,
+                    indices: new_indices
+                }
+            );  
+    }
 }
 
 fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
@@ -884,6 +943,63 @@ mod tests {
         for (i,j,k,l,m, n, o) in iproduct!(-2..0, 2..4, 2..4, 0..2, 0..2, 0..2, 0..2){
             assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
         }
+    }
+    #[test]
+    fn test_substitution() {
+        // Negative bias on sub lineq
+        let main_gelineq:GeLineq = GeLineq {
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![1, 2, 3]
+        };
+        let sub_gelineq: GeLineq = GeLineq {
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![4,5]
+        };
+        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
+        for (i,j,k,l) in iproduct!(0..2, 0..2, 0..2, 0..2){
+            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
+            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
+        }
+        // Positive bias on sub lineq
+        let main_gelineq:GeLineq = GeLineq {
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![1, 2, 3]
+        };
+        let sub_gelineq: GeLineq = GeLineq {
+            coeffs  : vec![-1, -1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : 1,
+            indices : vec![4,5]
+        };
+        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
+        for (i,j,k,l) in iproduct!(0..2, 0..2, 0..2, 0..2){
+            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
+            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
+        }
+        // // Should fail
+        // let main_gelineq:GeLineq = GeLineq {
+        //     coeffs  : vec![1, 1, 1],
+        //     bounds  : vec![(0, 1), (0, 1), (0, 1)],
+        //     bias    : -2,
+        //     indices : vec![1, 2, 3]
+        // };
+        // let sub_gelineq: GeLineq = GeLineq {
+        //     coeffs  : vec![-1, 1, 1],
+        //     bounds  : vec![(0, 1), (0, 1), (0, 1)],
+        //     bias    : 0,
+        //     indices : vec![4,5, 6]
+        // };
+        // let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
+        // for (i,j,k,l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
+        //     let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l), (6, m)]) as i64;
+        //     assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l), (6, m)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l), (6,m)]));
+        // }
     }
 
     fn test_select_check_fn() {
