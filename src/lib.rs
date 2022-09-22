@@ -284,13 +284,13 @@ impl Variable {
     }
 }
 
-/// Data structure for representing an at least constraint on form x_0+x_1+...x_n >= val.
-/// `ids` vector property holds what variables are connected to this constraint. Each variable
-/// can only have -1 or 1 as coefficients, noted by either sign == true (1) or sign == false (-1).
+/// Data structure for representing an `at least` constraint on form 
+/// $$ c * v_0 + c * v_1 + ... + c * v_n + bias \ge 0 $$
+/// where $c \in [-1,1]$ depending on positive or negative bias.
+/// `ids` vector property holds what variables are connected to this constraint.
 pub struct AtLeast {
     ids     : Vec<u32>,
-    value   : i64,
-    sign    : bool
+    bias   : i64,
 }
 
 impl AtLeast {
@@ -322,8 +322,8 @@ impl AtLeast {
     /// ```
     pub fn to_lineq(&self, variable_bounds: Vec<(i64,i64)>) -> GeLineq {
         return GeLineq {
-            coeffs: vec![match self.sign {true => 1, false => -1}; self.size()],
-            bias: -1*i64::from(self.value),
+            coeffs: vec![match self.bias >= 0 {true => -1, false => 1}; self.size()],
+            bias: self.bias,
             bounds: variable_bounds,
             indices: self.ids.to_vec()
         }
@@ -332,7 +332,7 @@ impl AtLeast {
 
 impl Display for AtLeast {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({})({}>={})", match self.sign {true => "+", false => "-"}, self.ids.iter().map(|v| v.to_string()).collect::<Vec<String>>().join(","), self.value)
+        write!(f, "({})({}>={})", match self.bias < 0 {true => "+", false => "-"}, self.ids.iter().map(|v| v.to_string()).collect::<Vec<String>>().join(","), self.bias)
     }
 }
 
@@ -1022,8 +1022,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -1032,8 +1031,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -1042,8 +1040,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
@@ -1063,8 +1060,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -1073,8 +1069,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![2],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -1083,8 +1078,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![0],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
@@ -1107,8 +1101,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![2],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -1117,8 +1110,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
@@ -1137,8 +1129,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -1147,8 +1138,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -1157,8 +1147,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
@@ -1200,8 +1189,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -1235,8 +1223,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -1245,8 +1232,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -1255,8 +1241,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
