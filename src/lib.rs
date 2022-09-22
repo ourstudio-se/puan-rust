@@ -216,6 +216,7 @@ impl GeLineq {
         None
         
     }
+    
     pub fn substitution(main_gelineq: &GeLineq, variable_index: u32, sub_gelineq: &GeLineq) -> Option<GeLineq> {
         if sub_gelineq.bias < 0 {
             if (2*sub_gelineq._eqmax() + sub_gelineq.bias)/sub_gelineq._eqmax() >= 2 {
@@ -229,62 +230,62 @@ impl GeLineq {
             }
         }
         let mut equal_indices : Vec<(usize, usize)> = Vec::new();
-            for i in 0..main_gelineq.indices.len(){
-                for j in 0..sub_gelineq.indices.len(){
-                    if main_gelineq.indices[i]==sub_gelineq.indices[j] {
-                        equal_indices.push((i, j));
-                    }
+        for i in 0..main_gelineq.indices.len(){
+            for j in 0..sub_gelineq.indices.len(){
+                if main_gelineq.indices[i]==sub_gelineq.indices[j] {
+                    equal_indices.push((i, j));
                 }
             }
-            let n: usize = main_gelineq.coeffs.len() + sub_gelineq.coeffs.len() - equal_indices.len() - 1;
-            let mut new_coeffs : Vec<i64> = Vec::with_capacity(n);
-            let mut equal_index_pointer: usize = 0;
-            let mut corrector: i64 = 0;
-            let mut new_bounds : Vec<(i64, i64)> = Vec::with_capacity(n);
-            let mut new_indices : Vec<u32> = Vec::with_capacity(n);
-            
-            for i in 0..main_gelineq.coeffs.len() {
-                if main_gelineq.indices[i] == variable_index{
-                    continue;
-                }
-                if equal_index_pointer < equal_indices.len() && equal_indices[equal_index_pointer].0 == i {
-                    corrector = sub_gelineq.coeffs[equal_indices[equal_index_pointer].1];
-                    equal_index_pointer = equal_index_pointer + 1;
-                }
-                if sub_gelineq.bias < 0 {
-                    new_coeffs.push(main_gelineq.coeffs[i]*sub_gelineq._eqmax() + corrector);
-                } else {
-                    new_coeffs.push(main_gelineq.coeffs[i]*sub_gelineq._eqmin().abs() + corrector);
-                }
-                new_indices.push(main_gelineq.indices[i]);
-                new_bounds.push(main_gelineq.bounds[i]);
-                corrector = 0;
+        }
+        let n: usize = main_gelineq.coeffs.len() + sub_gelineq.coeffs.len() - equal_indices.len() - 1;
+        let mut new_coeffs : Vec<i64> = Vec::with_capacity(n);
+        let mut equal_index_pointer: usize = 0;
+        let mut corrector: i64 = 0;
+        let mut new_bounds : Vec<(i64, i64)> = Vec::with_capacity(n);
+        let mut new_indices : Vec<u32> = Vec::with_capacity(n);
+        
+        for i in 0..main_gelineq.coeffs.len() {
+            if main_gelineq.indices[i] == variable_index{
+                continue;
             }
-            let mut skip_equal_index = 0;
-            for i in 0..sub_gelineq.coeffs.len(){
-                for j in 0..equal_indices.len(){
-                    if equal_indices[j].1 == i {
-                        equal_indices.remove(j);
-                        skip_equal_index = 1;
-                        break;
-                    }
-                }
-                if skip_equal_index < 1 {
-                    new_coeffs.push(sub_gelineq.coeffs[i]);
-                    new_indices.push(sub_gelineq.indices[i]);
-                    new_bounds.push(sub_gelineq.bounds[i]);
-                }
-                skip_equal_index = 0;
+            if equal_index_pointer < equal_indices.len() && equal_indices[equal_index_pointer].0 == i {
+                corrector = sub_gelineq.coeffs[equal_indices[equal_index_pointer].1];
+                equal_index_pointer = equal_index_pointer + 1;
             }
-            let new_bias = if sub_gelineq.bias < 0 {main_gelineq.bias*sub_gelineq._eqmax() + sub_gelineq._eqmax() + sub_gelineq.bias} else {main_gelineq.bias*sub_gelineq._eqmin().abs() + sub_gelineq._eqmin().abs() + sub_gelineq.bias};
-            return Some(
-                GeLineq {
-                    coeffs: new_coeffs,
-                    bounds: new_bounds,
-                    bias: new_bias,
-                    indices: new_indices
+            if sub_gelineq.bias < 0 {
+                new_coeffs.push(main_gelineq.coeffs[i]*sub_gelineq._eqmax() + corrector);
+            } else {
+                new_coeffs.push(main_gelineq.coeffs[i]*sub_gelineq._eqmin().abs() + corrector);
+            }
+            new_indices.push(main_gelineq.indices[i]);
+            new_bounds.push(main_gelineq.bounds[i]);
+            corrector = 0;
+        }
+        let mut skip_equal_index = 0;
+        for i in 0..sub_gelineq.coeffs.len(){
+            for j in 0..equal_indices.len(){
+                if equal_indices[j].1 == i {
+                    equal_indices.remove(j);
+                    skip_equal_index = 1;
+                    break;
                 }
-            );  
+            }
+            if skip_equal_index < 1 {
+                new_coeffs.push(sub_gelineq.coeffs[i]);
+                new_indices.push(sub_gelineq.indices[i]);
+                new_bounds.push(sub_gelineq.bounds[i]);
+            }
+            skip_equal_index = 0;
+        }
+        let new_bias = if sub_gelineq.bias < 0 {main_gelineq.bias*sub_gelineq._eqmax() + sub_gelineq._eqmax() + sub_gelineq.bias} else {main_gelineq.bias*sub_gelineq._eqmin().abs() + sub_gelineq._eqmin().abs() + sub_gelineq.bias};
+        return Some(
+            GeLineq {
+                coeffs: new_coeffs,
+                bounds: new_bounds,
+                bias: new_bias,
+                indices: new_indices
+            }
+        );  
     }
 }
 
