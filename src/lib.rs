@@ -217,6 +217,17 @@ impl GeLineq {
         
     }
     pub fn substitution(main_gelineq: &GeLineq, variable_index: u32, sub_gelineq: &GeLineq) -> Option<GeLineq> {
+        if sub_gelineq.bias < 0 {
+            if (2*sub_gelineq._eqmax() + sub_gelineq.bias)/sub_gelineq._eqmax() >= 2 {
+                // Not possible to perform substitution
+                return None;
+            }
+        } else {
+            if (sub_gelineq._eqmax() + sub_gelineq._eqmin().abs() + sub_gelineq.bias) / sub_gelineq._eqmin().abs() >= 2 {
+                // Not possible to perform substitution
+                return None;
+            }
+        }
         let mut equal_indices : Vec<(usize, usize)> = Vec::new();
             for i in 0..main_gelineq.indices.len(){
                 for j in 0..sub_gelineq.indices.len(){
@@ -982,24 +993,21 @@ mod tests {
             let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
             assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
         }
-        // // Should fail
-        // let main_gelineq:GeLineq = GeLineq {
-        //     coeffs  : vec![1, 1, 1],
-        //     bounds  : vec![(0, 1), (0, 1), (0, 1)],
-        //     bias    : -2,
-        //     indices : vec![1, 2, 3]
-        // };
-        // let sub_gelineq: GeLineq = GeLineq {
-        //     coeffs  : vec![-1, 1, 1],
-        //     bounds  : vec![(0, 1), (0, 1), (0, 1)],
-        //     bias    : 0,
-        //     indices : vec![4,5, 6]
-        // };
-        // let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
-        // for (i,j,k,l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
-        //     let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l), (6, m)]) as i64;
-        //     assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l), (6, m)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l), (6,m)]));
-        // }
+        // Should fail
+        let main_gelineq:GeLineq = GeLineq {
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![1, 2, 3]
+        };
+        let sub_gelineq: GeLineq = GeLineq {
+            coeffs  : vec![-1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : 0,
+            indices : vec![4,5, 6]
+        };
+        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
+        assert!(result.is_none());
     }
 
     fn test_select_check_fn() {
