@@ -313,8 +313,8 @@ fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
 /// is used to reference to Statement or an input into a Theory. 
 #[derive(Copy)]
 pub struct Variable {
-    id      : u32,
-    bounds  : (i64, i64)
+    pub id      : u32,
+    pub bounds  : (i64, i64)
 }
 
 impl Clone for Variable {
@@ -360,8 +360,8 @@ impl Variable {
 /// where $c \in [-1,1]$ depending on positive or negative bias.
 /// `ids` vector property holds what variables are connected to this constraint.
 pub struct AtLeast {
-    ids     : Vec<u32>,
-    bias   : i64,
+    pub ids     : Vec<u32>,
+    pub bias   : i64,
 }
 
 impl AtLeast {
@@ -381,8 +381,7 @@ impl AtLeast {
     /// use puanrs::GeLineq;
     /// let at_least: AtLeast = AtLeast {
     ///     ids     : vec![0,1,2],
-    ///     value   : 1,
-    ///     sign    : true,
+    ///     bias   : -1,
     /// };
     /// let variable_bounds: Vec<(i64,i64)> = vec![(0,1),(0,1),(0,1)];
     /// let actual: GeLineq = at_least.to_lineq(variable_bounds);
@@ -411,14 +410,14 @@ impl Display for AtLeast {
 /// For instance, "A is true iff x > 3, else false" is a statement. Currently only `AtLeast` is
 /// considered to be an `Expression`.
 pub struct Statement {
-    variable    : Variable,
-    expression  : Option<AtLeast>
+    pub variable    : Variable,
+    pub expression  : Option<AtLeast>
 }
 
 /// A `Theory` is a list of statements with a common name (id).
 pub struct Theory {
-    id : String,
-    statements : Vec<Statement>
+    pub id : String,
+    pub statements : Vec<Statement>
 }
 
 impl Theory {
@@ -481,6 +480,7 @@ impl Theory {
     /// ```
     /// use puanrs::Theory;
     /// use puanrs::Statement;
+    /// use puanrs::AtLeast;
     /// use puanrs::Variable;
     /// use puanrs::GeLineq;
     /// let theory: Theory = Theory {
@@ -494,8 +494,7 @@ impl Theory {
     ///             expression  : Some(
     ///                 AtLeast {
     ///                     ids     : vec![1,2],
-    ///                     sign    : true,
-    ///                     value   : 1,
+    ///                     bias   : -1,
     ///                 }
     ///             )
     ///         },
