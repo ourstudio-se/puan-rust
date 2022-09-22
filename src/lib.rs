@@ -5,7 +5,6 @@
 use std::hash::Hash;
 use std::{collections::HashMap};
 use std::fmt::Display;
-use itertools::Itertools;
 use itertools::iproduct;
 use std::cmp;
 
@@ -239,8 +238,10 @@ fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
     return solution;
 }
 
+/// Variable data structure has two properties, "id" and "bounds". An instance of Variable
+/// is used to reference to Statement or an input into a Theory. 
 #[derive(Copy)]
-struct Variable {
+pub struct Variable {
     id      : u32,
     bounds  : (i64, i64)
 }
@@ -255,7 +256,25 @@ impl Clone for Variable {
 }
 
 impl Variable {
-    fn to_lineq_neg(&self) -> GeLineq {
+
+    /// A negated linear inequality representation of a Variable.
+    /// 
+    /// # Example:
+    /// 
+    /// ```
+    /// use puanrs::Variable;
+    /// use puanrs::GeLineq;
+    /// let variable: Variable = Variable {
+    ///     id      : 0,
+    ///     bounds  : (0,1)
+    /// };
+    /// let actual: GeLineq = variable.to_lineq_neg();
+    /// assert_eq!(actual.bias, 0);
+    /// assert_eq!(actual.bounds, vec![(0,1)]);
+    /// assert_eq!(actual.coeffs, vec![-1]);
+    /// assert_eq!(actual.indices, vec![0]);
+    /// ```
+    pub fn to_lineq_neg(&self) -> GeLineq {
         return GeLineq {
             coeffs: vec![-1],
             bias: 0,
@@ -265,10 +284,13 @@ impl Variable {
     }
 }
 
-struct AtLeast {
+/// Data structure for representing an `at least` constraint on form 
+/// $$ c * v_0 + c * v_1 + ... + c * v_n + bias \ge 0 $$
+/// where $c \in [-1,1]$ depending on positive or negative bias.
+/// `ids` vector property holds what variables are connected to this constraint.
+pub struct AtLeast {
     ids     : Vec<u32>,
-    value   : i64,
-    sign    : bool
+    bias   : i64,
 }
 
 impl AtLeast {
@@ -277,10 +299,31 @@ impl AtLeast {
         return self.ids.len();
     }
 
-    fn to_lineq(&self, variable_bounds: Vec<(i64,i64)>) -> GeLineq {
+    /// Transform into a linear inequality constraint.
+    /// `variable_bounds` are the lower and upper bound for each variable
+    /// in `ids`.
+    /// 
+    /// # Example:
+    /// 
+    /// ```
+    /// use puanrs::AtLeast;
+    /// use puanrs::GeLineq;
+    /// let at_least: AtLeast = AtLeast {
+    ///     ids     : vec![0,1,2],
+    ///     value   : 1,
+    ///     sign    : true,
+    /// };
+    /// let variable_bounds: Vec<(i64,i64)> = vec![(0,1),(0,1),(0,1)];
+    /// let actual: GeLineq = at_least.to_lineq(variable_bounds);
+    /// assert_eq!(actual.coeffs, vec![1,1,1]);
+    /// assert_eq!(actual.bias, -1);
+    /// assert_eq!(actual.bounds, vec![(0,1),(0,1),(0,1)]);
+    /// assert_eq!(actual.indices, vec![0,1,2]);
+    /// ```
+    pub fn to_lineq(&self, variable_bounds: Vec<(i64,i64)>) -> GeLineq {
         return GeLineq {
-            coeffs: vec![match self.sign {true => 1, false => -1}; self.size()],
-            bias: -1*i64::from(self.value),
+            coeffs: vec![match self.bias >= 0 {true => -1, false => 1}; self.size()],
+            bias: self.bias,
             bounds: variable_bounds,
             indices: self.ids.to_vec()
         }
@@ -289,16 +332,20 @@ impl AtLeast {
 
 impl Display for AtLeast {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({})({}>={})", match self.sign {true => "+", false => "-"}, self.ids.iter().map(|v| v.to_string()).collect::<Vec<String>>().join(","), self.value)
+        write!(f, "({})({}>={})", match self.bias < 0 {true => "+", false => "-"}, self.ids.iter().map(|v| v.to_string()).collect::<Vec<String>>().join(","), self.bias)
     }
 }
 
-struct Statement {
+/// A `Statement` is a declaration of a expression (or proposition) connected to a `Variable`.
+/// For instance, "A is true iff x > 3, else false" is a statement. Currently only `AtLeast` is
+/// considered to be an `Expression`.
+pub struct Statement {
     variable    : Variable,
     expression  : Option<AtLeast>
 }
 
-struct Theory {
+/// A `Theory` is a list of statements with a common name (id).
+pub struct Theory {
     id : String,
     statements : Vec<Statement>
 }
@@ -306,7 +353,7 @@ struct Theory {
 impl Theory {
 
     // top node/id, i.e the id which no one has as a child
-    fn top(&self) -> &u32 {
+    fn _top(&self) -> &u32 {
         let mut is_child : bool = true;
         let mut id_curr : &u32 = &self.statements.first().expect("theory is empty").variable.id;
         let mut counter = 0;
@@ -329,7 +376,8 @@ impl Theory {
         return id_curr;
     }
 
-    fn bottoms(&self) -> Vec<&u32> {
+    // All bottom / atomic variable ids. E.i. statements that don't have any children.
+    fn _bottoms(&self) -> Vec<&u32> {
         return self.statements.iter().filter_map(
             |statement| {
                 match &statement.expression {
@@ -341,20 +389,69 @@ impl Theory {
     }
 
     // Variable hash map from variable id to variable
-    fn variable_hm(&self) -> HashMap<u32, Variable> {
+    fn _variable_hm(&self) -> HashMap<u32, Variable> {
         return self.statements.iter().map(|statement: &Statement| {
             (statement.variable.id, statement.variable)
         }).collect();
     }
 
-    fn statement_hm(&self) -> HashMap<u32, &Statement> {
+    // Statement hash map from variable id to statement
+    fn _statement_hm(&self) -> HashMap<u32, &Statement> {
         return self.statements.iter().map(|statement: &Statement| {
             (statement.variable.id, statement)
         }).collect();
     }
 
-    fn to_lineqs(&self) -> Vec<GeLineq> {
-        let var_hm: HashMap<u32, Variable> = self.variable_hm();
+    /// Transforms all Statements in Theory into GeLineq's such that 
+    /// if all GeLineq's are true <-> Theory is true.
+    ///
+    /// # Example:
+    /// 
+    /// ```
+    /// use puanrs::Theory;
+    /// use puanrs::Statement;
+    /// use puanrs::Variable;
+    /// use puanrs::GeLineq;
+    /// let theory: Theory = Theory {
+    ///     id          : String::from("A"),
+    ///     statements  : vec![
+    ///         Statement {
+    ///             variable    : Variable {
+    ///                 id      : 0,
+    ///                 bounds  : (0,1),
+    ///             },
+    ///             expression  : Some(
+    ///                 AtLeast {
+    ///                     ids     : vec![1,2],
+    ///                     sign    : true,
+    ///                     value   : 1,
+    ///                 }
+    ///             )
+    ///         },
+    ///         Statement {
+    ///             variable    : Variable {
+    ///                 id      : 1,
+    ///                 bounds  : (0,1),
+    ///             },
+    ///             expression  : None
+    ///         },
+    ///         Statement {
+    ///             variable    : Variable {
+    ///                 id      : 2,
+    ///                 bounds  : (0,1),
+    ///             },
+    ///             expression  : None
+    ///         },
+    ///     ]
+    /// };
+    /// let actual: Vec<GeLineq> = theory.to_lineqs();
+    /// assert_eq!(actual.len(), 1);
+    /// assert_eq!(actual[0].bias, 0);
+    /// assert_eq!(actual[0].coeffs, vec![-1,1,1]);
+    /// assert_eq!(actual[0].indices, vec![0,1,2]);
+    /// ```
+    pub fn to_lineqs(&self) -> Vec<GeLineq> {
+        let var_hm: HashMap<u32, Variable> = self._variable_hm();
         return self.statements.iter().filter_map(
             |statement: &Statement| match &statement.expression {
                 Some(a) => GeLineq::merge_disj(
@@ -886,6 +983,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn test_select_check_fn() {
         assert_eq!(
             select_check(vec![[0,1],[1,2],[3,4],[5,6]]),
@@ -924,8 +1022,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -934,8 +1031,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -944,14 +1040,13 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
             ]
         };
-        assert_eq!(*t.top(), 0);
+        assert_eq!(*t._top(), 0);
     }
 
     #[test]
@@ -965,8 +1060,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -975,8 +1069,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![2],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -985,14 +1078,13 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![0],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
             ]
         };
-        t.top();
+        t._top();
     }
 
     #[test]
@@ -1009,8 +1101,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![2],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -1019,14 +1110,13 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
             ]
         };
-        t.top();
+        t._top();
     }
 
     #[test]
@@ -1039,8 +1129,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -1049,8 +1138,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -1059,8 +1147,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
@@ -1086,7 +1173,7 @@ mod tests {
                 },
             ]
         };
-        let vm = t.variable_hm();
+        let vm = t._variable_hm();
         let expected_keys : Vec<u32> = vec![0,1,2,3,4,5,6,7];
         let test_result = expected_keys.iter().map(|k| vm.contains_key(k)).all(|k| k);
         assert!(test_result);
@@ -1102,8 +1189,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -1121,7 +1207,7 @@ mod tests {
                 },
             ]
         };
-        let vm = t.variable_hm();
+        let vm = t._variable_hm();
         let expected_keys : Vec<u32> = vec![0,1,2];
         let test_result = expected_keys.iter().map(|k| vm.contains_key(k)).all(|k| k);
         assert!(test_result);
@@ -1137,8 +1223,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            sign: true,
-                            value: 1
+                            bias: -1
                         }
                     )
                 },
@@ -1147,8 +1232,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            sign: false,
-                            value: -1
+                            bias: 1
                         }
                     )
                 },
@@ -1157,8 +1241,7 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            sign: true,
-                            value: 3
+                            bias: -3
                         }
                     )
                 },
