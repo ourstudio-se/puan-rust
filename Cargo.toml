@@ -2,6 +2,8 @@
 name = "puan-rust"
 version = "0.1.0"
 edition = "2021"
+description = "Puan Rust package contain tools for defining logic relationships among linear inequalities and reduction algorithms."
+license-file = "LICENSE"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
