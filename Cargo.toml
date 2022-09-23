@@ -2,18 +2,14 @@
 name = "puan-rust"
 version = "0.1.0"
 edition = "2021"
-description = "Puan Rust package contain tools for defining logic relationships among linear inequalities and reduction algorithms."
-license-file = "LICENSE"
+description = "Puan package contain tools for defining logic relationships among linear inequalities and reduction algorithms."
+license = "Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
 name = "puanrs"
 crate-type = ["rlib", "cdylib"]
-
-[dependencies.pyo3]
-version = "0.15.1"
-features = ["extension-module"]
 
 [dependencies]
 itertools = "0.10.4"
