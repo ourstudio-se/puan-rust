@@ -1301,6 +1301,32 @@ mod tests {
             let z:i64 = sub_gelineq.satisfied(vec![(1, i), (3, j), (4,k)]) as i64;
             assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, z), (3, j), (4,k)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (3, j),(4,k)]));
         }
+        // Should fail
+        let main_gelineq:GeLineq = GeLineq {
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![1, 2, 3]
+        };
+        let sub_gelineq1: GeLineq = GeLineq {
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![4, 5]
+        };
+        let sub_gelineq2: GeLineq = GeLineq {
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![6, 7]
+        };
+        let result1 = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq1);
+        let result2 = GeLineq::substitution(&result1.as_ref().expect("No gelineq created"), 3, &sub_gelineq2);
+        for (i,j,k,l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
+            let y:i64 = sub_gelineq1.satisfied(vec![(1, i), (4, j),(5, k), (6,l), (7, m)]) as i64;
+            let z:i64 = sub_gelineq2.satisfied(vec![(1, i), (4, j),(5, k), (6,l), (7, m)]) as i64;
+            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, y), (3, z), (4, j),(5, k), (6,l), (7, m)]), result2.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, y), (3, z), (4, j),(5, k), (6,l), (7, m)]));
+        }
     }
 
     #[test]
