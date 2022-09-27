@@ -215,6 +215,33 @@ impl GeLineq {
         None
         
     }
+    
+    /// Takes a GeLineq, referred to as main GeLineq which has a variable (given by variable index) which in turn is a GeLineq, referred to as the sub GeLineq.
+    /// The function substitutes the variable with the sub GeLineq into the main GeLineq if possible. 
+    /// 
+    /// # Example
+    /// Given the lineq x + Y - 2 >= 0 where Y: a + b - 1 >= 0
+    /// a substitution would give 2x + a + b - 3 >= 0. Lets see it in code:
+    /// ```
+    /// use puanrs::GeLineq;
+    /// let main_gelineq:GeLineq = GeLineq {
+    ///    coeffs  : vec![1, 1],
+    ///    bounds  : vec![(0, 1), (0, 1)],
+    ///    bias    : -2,
+    ///    indices : vec![1, 2]
+    /// };
+    /// let sub_gelineq: GeLineq = GeLineq {
+    ///    coeffs  : vec![1, 1],
+    ///    bounds  : vec![(0, 1), (0, 1)],
+    ///    bias    : -1,
+    ///    indices : vec![3, 4]
+    /// };
+    /// let result = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq);
+    /// assert_eq!(vec![2, 1, 1], result.as_ref().expect("No result generated").coeffs);
+    /// assert_eq!(vec![(0,1), (0,1), (0,1)], result.as_ref().expect("No result generated").bounds);
+    /// assert_eq!(-3, result.as_ref().expect("No result generated").bias);
+    /// assert_eq!(vec![1, 3, 4], result.as_ref().expect("No result generated").indices);
+    /// ```
 
     pub fn substitution(main_gelineq: &GeLineq, variable_index: u32, sub_gelineq: &GeLineq) -> Option<GeLineq> {
         let var_to_substitute = main_gelineq.indices.iter().position(|&x| x == variable_index).expect(&format!("Variable '{variable_index}' to substitute not found"));
@@ -303,8 +330,67 @@ impl GeLineq {
             }
         );  
     }
-}
 
+    
+    fn is_mixed(gelineq: &GeLineq) -> bool {
+        let mut is_mixed = false;
+        let mut positive = false;
+        let mut negative = false;
+        let mut i: usize = 0;
+        while !is_mixed && i < gelineq.coeffs.len() {
+            if gelineq.coeffs[i]*gelineq.bounds[i].0 > 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 > 0 {
+                positive = true;
+            }
+            if gelineq.coeffs[i]*gelineq.bounds[i].0 < 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 < 0 {
+                negative = true
+            }
+            if positive && negative {
+                is_mixed = true;
+            }
+            i = i + 1;
+        }
+        return is_mixed;
+    }
+    
+    /// Takes a GeLineq and minimizes/maximizes the coefficients while preserving the logic
+    /// 
+    /// # Example
+    /// 
+    /// Consider the GeLineq 2x + y + z >= 1 where x, y, z takes values between 0 and 1.
+    /// This inequlity can be written as x + y + z >= 1 while preserving the logic. 
+    /// ```
+    /// use puanrs::GeLineq;
+    /// let gelineq: GeLineq = GeLineq {
+    ///     coeffs  : vec![2, 1, 1],
+    ///     bounds  : vec![(0,1), (0,1), (0,1)],
+    ///     bias    : -1,
+    ///     indices : vec![0, 1, 2]
+    ///   };
+    /// let result = GeLineq::min_max_coefficients(&gelineq);
+    /// assert_eq!(vec![1, 1, 1], result.as_ref().expect("").coeffs);
+    pub fn min_max_coefficients(gelineq: &GeLineq) -> Option<GeLineq> {
+        if GeLineq::is_mixed(gelineq){
+            return None;
+        }
+        let mut new_coeffs: Vec<i64> = Vec::with_capacity(gelineq.coeffs.len());
+        for i in 0..gelineq.coeffs.len(){
+            if gelineq.coeffs[i]*gelineq.bounds[i].0 > 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 > 0 {
+                new_coeffs.push(cmp::min(gelineq.coeffs[i], cmp::max(-gelineq.bias, 0)));
+            } else if gelineq.coeffs[i]*gelineq.bounds[i].0 < 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 < 0 {
+                new_coeffs.push(cmp::max(gelineq.coeffs[i], cmp::min(-gelineq.bias, 0)-1));
+            } else {
+                new_coeffs.push(0);
+            }
+        }
+        return Some(GeLineq {
+            coeffs: new_coeffs,
+            bounds: gelineq.bounds.to_vec(),
+            bias: gelineq.bias, 
+            indices: gelineq.indices.to_vec() })
+        }
+        
+        
+    }
 fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
     let mut candidates: Vec<[u32;2]> = pairs.to_vec();
     let mut solution: Vec<[u32;2]> = Vec::new();
@@ -1089,6 +1175,24 @@ mod tests {
             let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
             assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
         }
+
+        let main_gelineq:GeLineq = GeLineq {
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![1, 2, 3]
+        };
+        let sub_gelineq: GeLineq = GeLineq {
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![4,5]
+        };
+        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
+        for (i,j,k,l) in iproduct!(0..2, 0..2, 0..2, 0..2){
+            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
+            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
+        }
         // Positive bias on sub lineq
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1107,7 +1211,7 @@ mod tests {
             let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
             assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
         }
-        // Should fail
+        // Not possible to substitute
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
@@ -1144,6 +1248,128 @@ mod tests {
             assert_eq!(main_gelineq.satisfied(vec![(2, i), (1, x)]), result.as_ref().expect("No result generated").satisfied(vec![(2, i), (1, x)]));
         }
         
+        // Mixed signs of coeffs in sub lineq, possible to merge
+        let main_gelineq:GeLineq = GeLineq {
+            coeffs  : vec![1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![1, 2, 3]
+        };
+        let sub_gelineq: GeLineq = GeLineq {
+            coeffs  : vec![-1, 1, 1],
+            bounds  : vec![(0, 1), (0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![4,5, 6]
+        };
+        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
+        for (i,j,k,l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
+            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l), (6,m)]) as i64;
+            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l),(6,m)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l),(6,m)]));
+        }
+
+        let main_gelineq:GeLineq = GeLineq {
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -2,
+            indices : vec![1, 2]
+        };
+        let sub_gelineq: GeLineq = GeLineq {
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![3, 4]
+        };
+        let result = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq);
+        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
+            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (3, j), (4,k)]) as i64;
+            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, z), (3, j), (4,k)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (3, j),(4,k)]));
+        }
+        let main_gelineq:GeLineq = GeLineq {
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![1, 2]
+        };
+        let sub_gelineq: GeLineq = GeLineq {
+            coeffs  : vec![1, 1],
+            bounds  : vec![(0, 1), (0, 1)],
+            bias    : -1,
+            indices : vec![3, 4]
+        };
+        let result = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq);
+        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
+            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (3, j), (4,k)]) as i64;
+            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, z), (3, j), (4,k)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (3, j),(4,k)]));
+        }
+    }
+
+    #[test]
+    fn test_min_max_coefficients() {
+        let gelineq : GeLineq = GeLineq { 
+            coeffs: vec![2, 1, 1],
+            bounds: vec![(0,1),(0,1),(0,1)],
+            bias: -1,
+            indices: vec![0, 1, 2]
+        };
+        let result = GeLineq::min_max_coefficients(&gelineq);
+        assert_eq!(vec![1, 1, 1], result.as_ref().expect("").coeffs);
+        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
+            assert_eq!(gelineq.satisfied(vec![(0, i), (1, j), (2, k)]), result.as_ref().expect("No result generated").satisfied(vec![(0, i), (1, j), (2, k)]));
+        }
+
+        let gelineq : GeLineq = GeLineq { 
+            coeffs: vec![2, 1, 1],
+            bounds: vec![(-2,-1),(0,1),(0,1)],
+            bias: 0,
+            indices: vec![0, 1, 2]
+        };
+        let result = GeLineq::min_max_coefficients(&gelineq);
+        assert!(result.is_none());
+
+        let gelineq : GeLineq = GeLineq { 
+            coeffs: vec![5, 6, 3],
+            bounds: vec![(0,1),(0,1),(0,1)],
+            bias: -1,
+            indices: vec![0, 1, 2]
+        };
+        let result = GeLineq::min_max_coefficients(&gelineq);
+        assert_eq!(vec![1, 1, 1], result.as_ref().expect("").coeffs);
+        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
+            assert_eq!(gelineq.satisfied(vec![(0, i), (1, j), (2, k)]), result.as_ref().expect("No result generated").satisfied(vec![(0, i), (1, j), (2, k)]));
+        }
+
+        let gelineq : GeLineq = GeLineq { 
+            coeffs: vec![-2, -1, -1],
+            bounds: vec![(0,1),(0,1),(0,1)],
+            bias: 0,
+            indices: vec![0, 1, 2]
+        };
+        let result = GeLineq::min_max_coefficients(&gelineq);
+        assert_eq!(vec![-1, -1, -1], result.as_ref().expect("").coeffs);
+        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
+            assert_eq!(gelineq.satisfied(vec![(0, i), (1, j), (2, k)]), result.as_ref().expect("No result generated").satisfied(vec![(0, i), (1, j), (2, k)]));
+        }
+
+        let gelineq : GeLineq = GeLineq { 
+            coeffs: vec![-2, -1, -1],
+            bounds: vec![(0,1),(0,1),(0,1)],
+            bias: 1,
+            indices: vec![0, 1, 2]
+        };
+        let result = GeLineq::min_max_coefficients(&gelineq);
+        assert_eq!(vec![-2, -1, -1], result.as_ref().expect("").coeffs);
+        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
+            assert_eq!(gelineq.satisfied(vec![(0, i), (1, j), (2, k)]), result.as_ref().expect("No result generated").satisfied(vec![(0, i), (1, j), (2, k)]));
+        }
+
+        let gelineq : GeLineq = GeLineq { 
+            coeffs: vec![-2, 1, 1],
+            bounds: vec![(0,1),(0,1),(0,1)],
+            bias: 0,
+            indices: vec![0, 1, 2]
+        };
+        let result = GeLineq::min_max_coefficients(&gelineq);
+        assert!(result.is_none());
     }
 
     #[test]
