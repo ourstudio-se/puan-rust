@@ -217,15 +217,7 @@ impl GeLineq {
     }
 
     pub fn substitution(main_gelineq: &GeLineq, variable_index: u32, sub_gelineq: &GeLineq) -> Option<GeLineq> {
-        let mut var_to_substitute: usize = main_gelineq.indices.len();
-        for i in 0..main_gelineq.indices.len(){
-            if main_gelineq.indices[i] == variable_index {
-                var_to_substitute = i;
-            }
-        }
-        if var_to_substitute == main_gelineq.indices.len() {
-            panic!("Variable to substitute not found");
-        }
+        let var_to_substitute = main_gelineq.indices.iter().position(|x| x == variable_index).expect(&format!("Variable '{variable_index}' to substitute not found"))
         if main_gelineq.coeffs[var_to_substitute] < 0 {
             let new_sub_coeffs: Vec<i64> = sub_gelineq.coeffs.iter().map(|x| -1*x).collect();
             let new_sub_bias = -sub_gelineq.bias - 1;
