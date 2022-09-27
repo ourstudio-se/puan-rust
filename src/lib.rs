@@ -331,6 +331,27 @@ impl GeLineq {
         );  
     }
 
+    
+    fn is_mixed(gelineq: &GeLineq) -> bool {
+        let mut is_mixed = false;
+        let mut positive = false;
+        let mut negative = false;
+        let mut i: usize = 0;
+        while !is_mixed && i < gelineq.coeffs.len() {
+            if gelineq.coeffs[i]*gelineq.bounds[i].0 > 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 > 0 {
+                positive = true;
+            }
+            if gelineq.coeffs[i]*gelineq.bounds[i].0 < 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 < 0 {
+                negative = true
+            }
+            if positive && negative {
+                is_mixed = true;
+            }
+            i = i + 1;
+        }
+        return is_mixed;
+    }
+    
     /// Takes a GeLineq and minimizes/maximizes the coefficients while preserving the logic
     /// 
     /// # Example
@@ -348,22 +369,17 @@ impl GeLineq {
     /// let result = GeLineq::min_max_coefficients(&gelineq);
     /// assert_eq!(vec![1, 1, 1], result.as_ref().expect("").coeffs);
     pub fn min_max_coefficients(gelineq: &GeLineq) -> Option<GeLineq> {
+        if GeLineq::is_mixed(gelineq){
+            return None;
+        }
         let mut new_coeffs: Vec<i64> = Vec::with_capacity(gelineq.coeffs.len());
-        let mut positives: bool = false;
-        let mut negatives: bool = false;
         for i in 0..gelineq.coeffs.len(){
             if gelineq.coeffs[i]*gelineq.bounds[i].0 > 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 > 0 {
-                positives = true;
-            }
-            if gelineq.coeffs[i]*gelineq.bounds[i].0 < 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 < 0 {
-                negatives = true;
-            }
-            if positives && negatives {
-                return None;
-            } else if positives {
                 new_coeffs.push(cmp::min(gelineq.coeffs[i], cmp::max(-gelineq.bias, 0)));
-            } else {
+            } else if gelineq.coeffs[i]*gelineq.bounds[i].0 < 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 < 0 {
                 new_coeffs.push(cmp::max(gelineq.coeffs[i], cmp::min(-gelineq.bias, 0)-1));
+            } else {
+                new_coeffs.push(0);
             }
         }
         return Some(GeLineq {
@@ -371,9 +387,10 @@ impl GeLineq {
             bounds: gelineq.bounds.to_vec(),
             bias: gelineq.bias, 
             indices: gelineq.indices.to_vec() })
+        }
+        
+        
     }
-}
-
 fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
     let mut candidates: Vec<[u32;2]> = pairs.to_vec();
     let mut solution: Vec<[u32;2]> = Vec::new();
