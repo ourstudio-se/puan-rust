@@ -260,6 +260,10 @@ impl GeLineq {
     }
     
     fn _substitution(main_gelineq: &GeLineq, variable_index: usize, sub_gelineq: &GeLineq) -> Option<GeLineq> {
+        if !GeLineq::is_homogenous(main_gelineq) && sub_gelineq.coeffs.len() > 1 {
+            // Not possible to perform substitution
+            return None;
+        }
         if sub_gelineq.bias < 0 {
             if sub_gelineq._eqmax() > 0 && (main_gelineq.coeffs[variable_index]*(2*sub_gelineq._eqmax() + sub_gelineq.bias)/sub_gelineq._eqmax()) >= 2 {
                 // Not possible to perform substitution
@@ -331,6 +335,10 @@ impl GeLineq {
         );  
     }
 
+    fn is_homogenous(ge_lineq: &GeLineq) -> bool {
+        let first = ge_lineq.coeffs[0];
+        ge_lineq.coeffs.iter().all(|x| *x==first)
+    }
     
     fn is_mixed(gelineq: &GeLineq) -> bool {
         let mut is_mixed = false;
@@ -657,6 +665,8 @@ impl Theory {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
 
     #[test]
@@ -1243,7 +1253,7 @@ mod tests {
         assert_eq!(vec![-1], result.as_ref().expect("").coeffs);
         assert_eq!(vec![(0, 10)], result.as_ref().expect("").bounds);
         assert_eq!(2, result.as_ref().expect("").bias);
-        for (i) in iproduct!(0..11){
+        for i in iproduct!(0..11){
             let x:i64 = sub_gelineq.satisfied(vec![(2, i)]) as i64;
             assert_eq!(main_gelineq.satisfied(vec![(2, i), (1, x)]), result.as_ref().expect("No result generated").satisfied(vec![(2, i), (1, x)]));
         }
@@ -1301,7 +1311,6 @@ mod tests {
             let z:i64 = sub_gelineq.satisfied(vec![(1, i), (3, j), (4,k)]) as i64;
             assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, z), (3, j), (4,k)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (3, j),(4,k)]));
         }
-        // Should fail
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
@@ -1322,11 +1331,7 @@ mod tests {
         };
         let result1 = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq1);
         let result2 = GeLineq::substitution(&result1.as_ref().expect("No gelineq created"), 3, &sub_gelineq2);
-        for (i,j,k,l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
-            let y:i64 = sub_gelineq1.satisfied(vec![(1, i), (4, j),(5, k), (6,l), (7, m)]) as i64;
-            let z:i64 = sub_gelineq2.satisfied(vec![(1, i), (4, j),(5, k), (6,l), (7, m)]) as i64;
-            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, y), (3, z), (4, j),(5, k), (6,l), (7, m)]), result2.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, y), (3, z), (4, j),(5, k), (6,l), (7, m)]));
-        }
+        assert!(result2.is_none());
     }
 
     #[test]
