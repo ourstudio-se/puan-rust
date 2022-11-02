@@ -428,6 +428,51 @@ pub fn transpose(mat: &Matrix) -> Matrix{
     return Matrix{val: result, nrows: mat.ncols, ncols: mat.nrows}
 }
 
+pub fn gauss_elimination(mat: &Matrix, row: usize, by: usize, col: usize) -> Matrix{
+    if mat.val[by*mat.ncols+col] == 0.0 {
+        panic!("Cannot perform Gauss elimination when 'col' coefficient is zero");
+    }
+    let corr = mat.val[row*mat.ncols + col]/mat.val[by*mat.ncols+col];
+    row_addition(mat, row, by, Some(corr))
+}
+
+pub fn row_addition(mat: &Matrix, dst_row: usize, src_row: usize, multiplier: Option<f64>) -> Matrix{
+    let mul: f64;
+    if multiplier.is_none() {
+        mul = 1.0;
+    } else {
+        mul = multiplier.expect("No valid multiplier");
+    }
+    let mut tmp = Vec::with_capacity(mat.val.len());
+    for i in 0..mat.val.len(){
+        if i >= dst_row*mat.ncols && i < dst_row*mat.ncols+mat.ncols{
+            tmp.push(mat.val[i]-mat.val[src_row*mat.ncols+i%mat.ncols]*mul);
+        } else {
+            tmp.push(mat.val[i]);
+        }
+    }
+    return Matrix{val: tmp, ncols: mat.ncols, nrows: mat.nrows}
+}
+
+pub fn get_columns(mat: &Matrix, ind: &Vec<usize>) -> Matrix {
+    let mut result: Vec<f64> = Vec::with_capacity(ind.len());
+    for i in 0..mat.nrows {
+        result.extend(ind.iter().map(|j| mat.val[i*mat.ncols+j]).collect::<Vec<f64>>());
+    }
+    return Matrix { val: result, ncols: ind.len(), nrows: mat.nrows }   
+}
+
+pub fn update_column(mat: &Matrix, ind: usize, v: &Vec<f64>) -> Matrix{
+    if mat.nrows != v.len() {
+        panic!("Dimension does not match");
+    }
+    let mut result = mat.val.to_vec();
+    for i in 0..v.len() {
+        result[i*mat.ncols+ind] = v[i];
+    }
+    Matrix { val: result, ncols: mat.ncols, nrows: mat.nrows}
+}
+
 impl Clone for Matrix {
     fn clone(&self) -> Self {
         return Matrix {
@@ -463,6 +508,39 @@ impl Matrix {
     pub fn transpose(&self) -> Matrix{
         transpose(self)
     }
+    pub fn insert_column(&self, column: usize, elem: Vec<f64>) -> Matrix {
+    if column > self.ncols {
+        panic!("Cannot insert column at {} to matrix with dimensions {}, {}", column, self.nrows, self.ncols);
+    }
+    let mut result = Vec::new();
+    let mut j = 0;
+    for (i, e) in self.val.iter().enumerate() {
+        if (i + self.ncols - column) > 0 && (i + self.ncols - column) % self.ncols == 0 {
+            result.push(elem[j].clone());
+            j = j + 1;
+        }
+        result.push(e.clone());
+    }
+    if (j + 1) == elem.len() {
+        result.push(elem[j])
+    }
+    return Matrix { val: result, ncols: self.ncols+1, nrows: self.nrows }
+    }
+    pub fn gauss_elimination(&self, row: usize, by: usize, col: usize) -> Matrix{
+        gauss_elimination(self, row, by, col)
+    }
+
+    pub fn row_addition(&self, dst_row: usize, src_row: usize, multiplier: Option<f64>) -> Matrix{
+        row_addition(self, dst_row, src_row, multiplier)
+    }
+
+    pub fn get_columns(&self, ind: &Vec<usize>) -> Matrix {
+        get_columns(self, ind)
+    }
+
+    pub fn update_column(&self, ind: usize, v: &Vec<f64>) -> Matrix{
+        update_column(self, ind, v)
+    }
 }
 
 #[cfg(test)]
@@ -482,6 +560,12 @@ mod tests {
         };
         assert_eq!(m1.dot(&m2).val, Matrix{val: vec![25.0, 28.0, 57.0, 64.0, 89.0, 100.0], ncols: 2, nrows: 3}.val);
 
+    }
+
+    #[test]
+    fn test_mod(){
+        let a = 1%2;
+        assert_eq!(a, 0);
     }
 
 }
