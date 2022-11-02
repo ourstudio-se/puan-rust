@@ -562,10 +562,4 @@ mod tests {
 
     }
 
-    #[test]
-    fn test_mod(){
-        let a = 1%2;
-        assert_eq!(a, 0);
-    }
-
 }

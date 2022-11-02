@@ -290,7 +290,7 @@ impl LinearProgram {
     /// use puanrs::solver::LinearProgram;
     /// use puanrs::solver::Polyhedron;
     /// use puanrs::linalg::Matrix;
-    /// let (z, x, info) = LinearProgram::solve(&LinearProgram {
+    /// let sol = LinearProgram::solve(&LinearProgram {
     ///                 ge_ph: Polyhedron {
     ///                         a: Matrix{val: vec![-2.0, -1.0, -1.0, -1.0, -1.0, 0.0],
     ///                         nrows: 3,
@@ -298,9 +298,9 @@ impl LinearProgram {
     ///                         b: vec![-100.0, -80.0, -40.0],
     ///                         bounds: vec![(0.0,f64::MAX), (0.0,f64::MAX)]
     ///                 },
+    ///                 eq_ph: Default::default(),
     ///                 of: vec![30.0, 20.0],
-    ///                 sol: Default::default()
-    ///             });
+    ///             }, None);
     /// ```
     pub fn solve_ilp(&self, sol: Option<&Solution>) -> IntegerSolution {
         solve_ilp(self, sol)
