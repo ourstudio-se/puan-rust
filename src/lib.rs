@@ -8,6 +8,9 @@ use std::fmt::Display;
 use itertools::iproduct;
 use std::cmp;
 
+pub mod solver;
+pub mod linalg;
+
 /// Data structure for linear inequalities on the following form
 /// $$ c_0 * v_0 + c_1 * v_1 + ... + c_n * v_n + bias \ge 0 $$ for $ c \in $ `coeffs` and $ v $ are variables which can take on the values
 /// given by `bounds`. `Indices` represents the global indices of the variables. Note that the length of `coeffs`, `bounds` and `indices` must be the same.
@@ -1243,7 +1246,7 @@ mod tests {
         assert_eq!(vec![-1], result.as_ref().expect("").coeffs);
         assert_eq!(vec![(0, 10)], result.as_ref().expect("").bounds);
         assert_eq!(2, result.as_ref().expect("").bias);
-        for (i) in iproduct!(0..11){
+        for i in iproduct!(0..11){
             let x:i64 = sub_gelineq.satisfied(vec![(2, i)]) as i64;
             assert_eq!(main_gelineq.satisfied(vec![(2, i), (1, x)]), result.as_ref().expect("No result generated").satisfied(vec![(2, i), (1, x)]));
         }
@@ -1680,5 +1683,4 @@ mod tests {
         let test_ok = actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias);
         assert!(test_ok);
     }
-
 }
