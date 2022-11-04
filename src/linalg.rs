@@ -3,6 +3,28 @@
 //! Handy tools from linear algebra
 //! 
 
+/// Data structure for matrix
+#[derive(Debug)]
+#[derive(Default)]
+pub struct Matrix {
+    /// `Vec` holding the values of the matrix. Note that `val.len()` must be equal to the product of `ncols` and `nrows`.
+    pub val: Vec<f64>,
+    /// Number of columns of the matrix
+    pub ncols: usize,
+    /// Number of rows of the matrix
+    pub nrows: usize
+}
+
+impl Clone for Matrix {
+    fn clone(&self) -> Self {
+        return Matrix {
+            val : self.val.to_vec(),
+            ncols: self.ncols,
+            nrows: self.nrows
+        }
+    }
+}
+
 /// Creates an identity matrix based on the input size `n`
 pub fn identity_matrix(n: usize) -> Matrix {
     let mut t: Vec<f64> = Vec::with_capacity(n*n);
@@ -16,18 +38,6 @@ pub fn identity_matrix(n: usize) -> Matrix {
         }
     }
     Matrix { val: t, ncols: n, nrows: n}
-}
-
-/// Data structure for matrix
-#[derive(Debug)]
-#[derive(Default)]
-pub struct Matrix {
-    /// `Vec` holding the values of the matrix. Note that `val.len()` must be equal to the product of `ncols` and `nrows`.
-    pub val: Vec<f64>,
-    /// Number of columns of the matrix
-    pub ncols: usize,
-    /// Number of rows of the matrix
-    pub nrows: usize
 }
 
 /// Calculates the dot product between two matrices
@@ -428,20 +438,41 @@ pub fn transpose(mat: &Matrix) -> Matrix{
     return Matrix{val: result, nrows: mat.ncols, ncols: mat.nrows}
 }
 
-pub fn gauss_elimination(mat: &Matrix, row: usize, by: usize, col: usize) -> Matrix{
-    if mat.val[by*mat.ncols+col] == 0.0 {
-        panic!("Cannot perform Gauss elimination when 'col' coefficient is zero");
+/// Eliminates column coefficient `col` of row `dst_row` by Gauss elemination with row `src_row`.
+pub fn gauss_elimination(mat: &Matrix, dst_row: usize, src_row: usize, col: usize) -> Matrix{
+    if mat.val[src_row*mat.ncols+col] == 0.0 {
+        panic!("Cannot perform Gauss elimination when 'col' coefficient in the 'src_row' is zero");
     }
-    let corr = mat.val[row*mat.ncols + col]/mat.val[by*mat.ncols+col];
-    row_addition(mat, row, by, Some(corr))
+    let corr = mat.val[dst_row*mat.ncols + col]/mat.val[src_row*mat.ncols+col];
+    row_subtraction(mat, dst_row, src_row, Some(corr))
 }
 
+/// Adds `src_row` to `dst_row`. If multiplier is given the `src_row` is multiplied by this number before the addition.
 pub fn row_addition(mat: &Matrix, dst_row: usize, src_row: usize, multiplier: Option<f64>) -> Matrix{
     let mul: f64;
     if multiplier.is_none() {
         mul = 1.0;
     } else {
-        mul = multiplier.expect("No valid multiplier");
+        mul = multiplier.unwrap();
+    }
+    let mut tmp = Vec::with_capacity(mat.val.len());
+    for i in 0..mat.val.len(){
+        if i >= dst_row*mat.ncols && i < dst_row*mat.ncols+mat.ncols{
+            tmp.push(mat.val[i]+mat.val[src_row*mat.ncols+i%mat.ncols]*mul);
+        } else {
+            tmp.push(mat.val[i]);
+        }
+    }
+    return Matrix{val: tmp, ncols: mat.ncols, nrows: mat.nrows}
+}
+
+/// Subtracts `dst_row` with `src_row`. If multiplier is given the `src_row` is multiplied by this number before the subtraction.
+pub fn row_subtraction(mat: &Matrix, dst_row: usize, src_row: usize, multiplier: Option<f64>) -> Matrix{
+    let mul: f64;
+    if multiplier.is_none() {
+        mul = 1.0;
+    } else {
+        mul = multiplier.unwrap();
     }
     let mut tmp = Vec::with_capacity(mat.val.len());
     for i in 0..mat.val.len(){
@@ -454,6 +485,7 @@ pub fn row_addition(mat: &Matrix, dst_row: usize, src_row: usize, multiplier: Op
     return Matrix{val: tmp, ncols: mat.ncols, nrows: mat.nrows}
 }
 
+/// Returns a new Matrix with the coluns specified by `ind`. 
 pub fn get_columns(mat: &Matrix, ind: &Vec<usize>) -> Matrix {
     let mut result: Vec<f64> = Vec::with_capacity(ind.len());
     for i in 0..mat.nrows {
@@ -462,6 +494,7 @@ pub fn get_columns(mat: &Matrix, ind: &Vec<usize>) -> Matrix {
     return Matrix { val: result, ncols: ind.len(), nrows: mat.nrows }   
 }
 
+/// Returns a new Matrix with column `ind` replaced with `v`. 
 pub fn update_column(mat: &Matrix, ind: usize, v: &Vec<f64>) -> Matrix{
     if mat.nrows != v.len() {
         panic!("Dimension does not match");
@@ -471,16 +504,6 @@ pub fn update_column(mat: &Matrix, ind: usize, v: &Vec<f64>) -> Matrix{
         result[i*mat.ncols+ind] = v[i];
     }
     Matrix { val: result, ncols: mat.ncols, nrows: mat.nrows}
-}
-
-impl Clone for Matrix {
-    fn clone(&self) -> Self {
-        return Matrix {
-            val : self.val.to_vec(),
-            ncols: self.ncols,
-            nrows: self.nrows
-        }
-    }
 }
 
 impl Matrix {
