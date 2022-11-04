@@ -83,9 +83,9 @@ impl Clone for BFS {
         return BFS { x: self.x.clone(), b_vars: self.b_vars.clone(), n_vars: self.n_vars.clone(), sub_vars: self.sub_vars.clone()}
     }
 }
-/// Data structure for a linear program.
+/// Data structure for a linear program (LP).
 #[derive(Default)]
-pub struct LinearProgram { // (ge_ph, eq_ph, of, )
+pub struct LinearProgram {
     /// Polyhedron with constraints on the form $ A \ge b $.
     pub ge_ph: Polyhedron,
     /// Polyhedron with constraints on the form $ A = b $.
@@ -97,6 +97,23 @@ pub struct LinearProgram { // (ge_ph, eq_ph, of, )
 impl Clone for LinearProgram {
     fn clone(&self) -> Self {
         return LinearProgram { ge_ph: self.ge_ph.clone(), eq_ph: self.eq_ph.clone(), of: self.of.clone()}
+    }
+}
+
+/// Data structure for an integer linear program (ILP).
+#[derive(Default)]
+pub struct IntegerLinearProgram {
+    /// Polyhedron with constraints on the form $ A \ge b $.
+    pub ge_ph: Polyhedron,
+    /// Polyhedron with constraints on the form $ A = b $.
+    pub eq_ph: Polyhedron,
+    /// Objective function.
+    pub of: Vec<f64>
+}
+
+impl Clone for IntegerLinearProgram {
+    fn clone(&self) -> Self {
+        return IntegerLinearProgram { ge_ph: self.ge_ph.clone(), eq_ph: self.eq_ph.clone(), of: self.of.clone()}
     }
 }
 
@@ -112,7 +129,7 @@ impl Clone for StandardFormLP {
     }
     
 }
-/// Function which converts a LP to a LP on standard form, i.e. introducing slack variables,
+/// Function which converts an LP to an LP on standard form, i.e. introducing slack variables,
 /// adding constraints for lower bounds above zero, substituting variables below zero etc.
 fn convert_lp_to_standard_form(lp: &LinearProgram) -> StandardFormLP {
     // Handle lower bounds above and below zero
@@ -164,6 +181,9 @@ fn convert_lp_to_standard_form(lp: &LinearProgram) -> StandardFormLP {
     }
 }
 
+fn convert_ilp_to_standard_form(lp: &IntegerLinearProgram) -> StandardFormLP {
+    convert_lp_to_standard_form(&LinearProgram{ge_ph: lp.ge_ph.clone(), eq_ph: lp.eq_ph.clone(), of: lp.of.clone()})
+}
 /// Phase one of the simplex algorithm, finds a basic feasible solution
 fn _simplex_phase_one(lp: &StandardFormLP) -> (StandardFormLP, BFS) {
     let mut origo_is_bfs = true;
@@ -267,7 +287,7 @@ pub fn solve_lp(lp: &LinearProgram) -> Solution {
 }
 
 /// Solves a maximization ILP using the Land-Doig-Dakins algorithm together with the simplex algorithm. 
-pub fn solve_ilp(lp: &LinearProgram) -> IntegerSolution {
+pub fn solve_ilp(lp: &IntegerLinearProgram) -> IntegerSolution {
     let mut z_lb: f64 = f64::MIN;
     let mut current_best_sol: Solution = Default::default();
     let mut nodes_to_explore = vec![LinearProgram{ge_ph: lp.ge_ph.clone(), eq_ph: lp.eq_ph.clone(), of: lp.of.to_vec()}]; 
@@ -348,40 +368,73 @@ impl LinearProgram {
     fn convert_to_standard_form(&self) -> StandardFormLP {
         convert_lp_to_standard_form(self)
     }
-    pub fn solve(&self) -> Solution {
-        solve_lp(self)
-    }
-    /// Solves a linear program with the revised simplex algorithm and produces an integer solution using the Land-Doig-Dakins algorithm. 
+    /// Solves a linear program with the revised simplex algorithm. 
     /// # Example:
     /// 
     /// Solve the linear program
-    /// $$ \max \quad 30x_1+20x_2 $$
-    /// $$ s.t. \quad 2x_1+x_2 \leq 100 $$
-    /// $$ \qquad \ x_1+x_2 \leq 80 $$
-    /// $$ \qquad \qquad \ x_1 \leq 40 $$
+    /// $$ \max \quad -4x_1+-5x_2 $$
+    /// $$ s.t. \quad x_1+4x_2 \geq 4 $$
+    /// $$ \qquad \ 3x_1+2x_2 \geq 6 $$
     /// $$ \qquad \  x_1, x_2 \geq 0$$
     /// ```
     /// use puanrs::solver::LinearProgram;
     /// use puanrs::solver::Polyhedron;
     /// use puanrs::linalg::Matrix;
-    /// let sol = LinearProgram::solve(&LinearProgram {
+    /// let sol = LinearProgram {
     ///                 ge_ph: Polyhedron {
-    ///                         a: Matrix{val: vec![-2.0, -1.0, -1.0, -1.0, -1.0, 0.0],
-    ///                         nrows: 3,
+    ///                         a: Matrix{val: vec![1.0, 4.0, 3.0, 2.0],
+    ///                         nrows: 2,
     ///                         ncols: 2},
-    ///                         b: vec![-100.0, -80.0, -40.0],
+    ///                         b: vec![4.0, 6.0],
     ///                         bounds: vec![(0.0,f64::MAX), (0.0,f64::MAX)]
     ///                 },
     ///                 eq_ph: Default::default(),
-    ///                 of: vec![30.0, 20.0],
-    ///             });
-    /// assert_eq!(sol.z, 1800.0);
-    /// assert_eq!(sol.x, vec![20.0, 60.0]);
+    ///                 of: vec![-4.0, -5.0],
+    ///             }.solve();
+    /// assert_eq!(sol.z, -9.4);
+    /// assert_eq!(sol.x, vec![1.6000000000000003, 0.5999999999999999]);
     /// assert_eq!(sol.status_code, 5);
     /// ```
-    pub fn solve_ilp(&self) -> IntegerSolution {
+    pub fn solve(&self) -> Solution {
+        solve_lp(self)
+    }
+}
+
+impl IntegerLinearProgram {
+    fn convert_to_standard_form(&self) -> StandardFormLP {
+        convert_ilp_to_standard_form(self)
+    }
+    /// Solves a linear program with the revised simplex algorithm and produces an integer solution using the Land-Doig-Dakins algorithm. 
+    /// # Example:
+    /// 
+    /// Solve the linear program
+    /// $$ \max \quad -4x_1+-5x_2 $$
+    /// $$ s.t. \quad x_1+4x_2 \geq 4 $$
+    /// $$ \qquad \ 3x_1+2x_2 \geq 6 $$
+    /// $$ \qquad \  x_1, x_2 \geq 0$$
+    /// ```
+    /// use puanrs::solver::IntegerLinearProgram;
+    /// use puanrs::solver::Polyhedron;
+    /// use puanrs::linalg::Matrix;
+    /// let sol = IntegerLinearProgram {
+    ///                 ge_ph: Polyhedron {
+    ///                         a: Matrix{val: vec![1.0, 4.0, 3.0, 2.0],
+    ///                         nrows: 2,
+    ///                         ncols: 2},
+    ///                         b: vec![4.0, 6.0],
+    ///                         bounds: vec![(0.0,f64::MAX), (0.0,f64::MAX)]
+    ///                 },
+    ///                 eq_ph: Default::default(),
+    ///                 of: vec![-4.0, -5.0],
+    ///             }.solve();
+    /// assert_eq!(sol.z, -13);
+    /// assert_eq!(sol.x, vec![2, 1]);
+    /// assert_eq!(sol.status_code, 5);
+    /// ```
+    pub fn solve(&self) -> IntegerSolution {
         solve_ilp(self)
     }
+    
 }
 
 /// The revised simplex algorithm
@@ -485,7 +538,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_solver_1(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![1.0, 1.0, 0.0, 0.0, 1.0, 1.0],
                           nrows: 2,
@@ -496,13 +549,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![1.0,1.0,1.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 3);
         assert_eq!(sol.x, vec![1, 1, 1]);
     }
     #[test]
     fn test_solver_2(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-2.0, -1.0, -1.0, -1.0, -1.0, 0.0],
                           nrows: 3,
@@ -513,13 +566,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![30.0,20.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 1800);
         assert_eq!(sol.x, vec![20, 60]);
     }
     #[test]
     fn test_solver_3(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-2.0, -1.0, -1.0, -1.0],
                           nrows: 2,
@@ -530,13 +583,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![30.0,20.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 1650);
         assert_eq!(sol.x, vec![35, 30]);
     }
     #[test]
     fn test_solver_4(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![2.0, -1.0, -1.0, -2.0, -1.0, 0.0, 0.0, -1.0, 1.0, 0.0, 1.0, -1.0],
                           nrows: 4,
@@ -547,13 +600,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![-2.0,-1.0, -1.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, -3);
         assert_eq!(sol.x, vec![1, 0, 1]);
     }
     #[test]
     fn test_solver_5(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-1.0, 1.0, -2.0, 1.0, 0.0, -1.0],
                           nrows: 3,
@@ -564,14 +617,14 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![1.0, 1.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 5);
         assert_eq!(sol.x, vec![3, 2]);
     }
 
     #[test]
     fn test_solver_6(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-5.0, -4.0],
                           nrows: 1,
@@ -582,14 +635,14 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![5.0, 2.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 20);
         assert_eq!(sol.x, vec![4, 0]);
     }
 
     #[test]
     fn test_solver_7(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-4.0, -2.0, -2.0, -3.0],
                           nrows: 1,
@@ -600,14 +653,14 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![7.0, 3.0, 2.0, 2.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 10);
         assert_eq!(sol.x, vec![1,1,0,0]);
     }
 
     #[test]
     fn test_solver_8(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![1.0, 4.0, 3.0, 2.0],
                             nrows: 2,
@@ -618,13 +671,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![-4.0, -5.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, -13);
         assert_eq!(sol.x, vec![2,1]);
     }
     #[test]
     fn test_solver_9(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![4.0, -3.0, -3.0, -2.0],
                             nrows: 2,
@@ -635,13 +688,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![1.0, 5.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 23);
         assert_eq!(sol.x, vec![3,4]);
     }
     #[test]
     fn test_solver_10(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-5.0, -7.0, -1.0, 0.0, 0.0, -1.0],
                             nrows: 3,
@@ -652,13 +705,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![5.0, 6.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 29);
         assert_eq!(sol.x, vec![1,4]);
     }
     #[test]
     fn test_solver_11(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-4.0, -2.0, -3.0, -1.0],
                             nrows: 1,
@@ -669,13 +722,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![18.0, 8.0, 4.0, 2.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 28);
         assert_eq!(sol.x, vec![1, 1, 0, 1]);
     }
     #[test]
     fn test_solver_12(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-6.0, -10.0, -15.0, -10.0],
                             nrows: 1,
@@ -686,13 +739,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![5.0, 10.0, 10.0, 16.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 53);
         assert_eq!(sol.x, vec![1, 0, 0, 3]);
     }
     #[test]
     fn test_solver_13(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-2.0, -3.0, -3.0],
                             nrows: 1,
@@ -703,13 +756,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![5.0, 6.0, 7.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 20);
         assert_eq!(sol.x, vec![0, 1, 2]);
     }
     #[test]
     fn test_solver_14(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-1.0, -2.0, -1.0, 0.0, 0.0, -2.0, -4.0, -3.0, -7.0, -3.0],
                             nrows: 2,
@@ -720,13 +773,13 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![5.0, 7.0, 6.0, 4.0, 5.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 16);
         assert_eq!(sol.x, vec![1, 0, 1, 0, 1]);
     }
     #[test]
     fn test_solver_15(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-2.0, -1.0, -2.0, -1.0],
                             nrows: 1,
@@ -737,14 +790,14 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![5.0, 8.0, 4.0, 6.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 19);
         assert_eq!(sol.x, vec![1, 1, 0, 1]);
     }
     // Unbounded
     #[test]
     fn test_solver_16(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![0.0, -1.0],
                             nrows: 1,
@@ -755,14 +808,14 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![1.0, 1.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, i64::MAX);
         assert_eq!(sol.x, vec![i64::MAX, 0]);
     }
     // Unsolvable
     #[test]
     fn test_solver_17(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![-1.0, -1.0, 1.0, -1.0, 0.0, 1.0],
                             nrows: 3,
@@ -773,14 +826,14 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![1.0, 1.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, -f64::MAX as i64);
         assert_eq!(sol.x, vec![]);
     }
     // Not feasible bfs
     #[test]
     fn test_solver_18(){
-        let lp: LinearProgram = LinearProgram {
+        let lp: IntegerLinearProgram = IntegerLinearProgram {
             ge_ph: Polyhedron {
                 a: Matrix{val: vec![1.0, 1.0, 0.0, 0.0, 1.0, 1.0],
                           nrows: 2,
@@ -791,7 +844,7 @@ mod tests {
             eq_ph: Default::default(),
             of: vec![1.0,1.0,1.0]
         };
-        let sol = LinearProgram::solve_ilp(&lp);
+        let sol = lp.solve();
         assert_eq!(sol.z, 3);
         assert_eq!(sol.x, vec![1, 1, 1]);
     }
