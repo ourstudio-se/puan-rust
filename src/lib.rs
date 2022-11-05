@@ -22,6 +22,17 @@ pub struct GeLineq {
     pub indices : Vec<u32>
 }
 
+impl Clone for GeLineq {
+    fn clone(&self) -> Self {
+        return GeLineq {
+            coeffs: self.coeffs.to_vec(),
+            bounds: self.bounds.to_vec(),
+            bias: self.bias,
+            indices: self.indices.to_vec(),
+        }
+    }
+}
+
 impl GeLineq {
     
     fn _eqmax(&self) -> i64 {
@@ -425,7 +436,7 @@ fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
 
 /// Variable data structure has two properties, "id" and "bounds". An instance of Variable
 /// is used to reference to Statement or an input into a Theory. 
-#[derive(Copy)]
+#[derive(Copy, Hash, Eq)]
 pub struct Variable {
     pub id      : u32,
     pub bounds  : (i64, i64)
@@ -437,6 +448,12 @@ impl Clone for Variable {
             id : self.id,
             bounds: self.bounds
         }
+    }
+}
+
+impl PartialEq for Variable {
+    fn eq(&self, other: &Self) -> bool {
+        return self.id == other.id;
     }
 }
 
@@ -478,6 +495,15 @@ pub struct AtLeast {
     pub bias   : i64,
 }
 
+impl Clone for AtLeast {
+    fn clone(&self) -> Self {
+        return AtLeast {
+            bias: self.bias,
+            ids: self.ids.to_vec(),
+        }
+    }
+}
+
 impl AtLeast {
 
     fn size(&self) -> usize {
@@ -504,12 +530,74 @@ impl AtLeast {
     /// assert_eq!(actual.bounds, vec![(0,1),(0,1),(0,1)]);
     /// assert_eq!(actual.indices, vec![0,1,2]);
     /// ```
-    pub fn to_lineq(&self, variable_bounds: Vec<(i64,i64)>) -> GeLineq {
+    pub fn to_lineq(&self, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
         return GeLineq {
             coeffs: vec![match self.bias >= 0 {true => -1, false => 1}; self.size()],
             bias: self.bias,
-            bounds: variable_bounds,
+            bounds: self.ids.iter().map(
+                |id| {
+                    variable_hm.get(id).expect(
+                        &format!(
+                            "got id `{id}` in expression {self} that was not in theory"
+                        )
+                    ).bounds
+                }
+            ).collect(),
             indices: self.ids.to_vec()
+        }
+    }
+
+    fn to_lineq_expressed(&self, variable: Variable, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
+        return GeLineq::merge_disj(
+            &variable.to_lineq_neg(),
+            &self.to_lineq(variable_hm)
+        ).expect("could not merge disjunctions") // <- should always be able to merge here
+    }
+
+    fn to_lineq_reduced(&self, top: bool, variable: Variable, variable_hm: &HashMap<u32, Variable>, statement_hm: &HashMap<u32, &Statement>) -> GeLineq {
+        return match (self.bias, self.ids.len()) {
+            (-1, 2) => {
+                let sub_lineqs: Vec<GeLineq> = self.ids.iter().filter_map(|id| {
+                    if let Some(statement) = statement_hm.get(id) {
+                        if let Some(expression) = statement.expression.clone() {
+                            return Some(expression.to_lineq(variable_hm));
+                        }
+                    }
+                    return None;
+                }).collect();
+                if sub_lineqs.len() == 2 {
+                    if let Some(lineq) = GeLineq::merge_disj(&sub_lineqs[0], &sub_lineqs[1]) {
+                        return lineq;
+                    } else {
+                        return self.to_lineq_expressed(variable, variable_hm)
+                    }
+                } else {
+                    return self.to_lineq_expressed(variable, variable_hm);
+                }
+            },
+            (-2, 2) => {
+                let sub_lineqs: Vec<GeLineq> = self.ids.iter().filter_map(|id| {
+                    if let Some(statement) = statement_hm.get(id) {
+                        if let Some(expression) = statement.expression.clone() {
+                            return Some(expression.to_lineq(variable_hm));
+                        }
+                    }
+                    return None;
+                }).collect();
+                if sub_lineqs.len() == 2 {
+                    if let Some(lineq) = GeLineq::merge_conj(&sub_lineqs[0], &sub_lineqs[1]) {
+                        return lineq;
+                    } else {
+                        return self.to_lineq_expressed(variable, variable_hm)
+                    }
+                } else {
+                    return self.to_lineq_expressed(variable, variable_hm);
+                }
+            },
+            _ => match top {
+                true => self.to_lineq(variable_hm),
+                false => self.to_lineq_expressed(variable, variable_hm)
+            }
         }
     }
 }
@@ -628,35 +716,44 @@ impl Theory {
     ///         },
     ///     ]
     /// };
-    /// let actual: Vec<GeLineq> = theory.to_lineqs();
+    /// let actual: Vec<GeLineq> = theory.to_lineqs(false);
     /// assert_eq!(actual.len(), 1);
     /// assert_eq!(actual[0].bias, 0);
     /// assert_eq!(actual[0].coeffs, vec![-1,1,1]);
     /// assert_eq!(actual[0].indices, vec![0,1,2]);
     /// ```
-    pub fn to_lineqs(&self) -> Vec<GeLineq> {
+    pub fn to_lineqs(&self, reduced: bool) -> Vec<GeLineq> {
+        let top_node_id = *self._top();
         let var_hm: HashMap<u32, Variable> = self._variable_hm();
-        return self.statements.iter().filter_map(
-            |statement: &Statement| match &statement.expression {
-                Some(a) => GeLineq::merge_disj(
-                    &statement.variable.to_lineq_neg(),
-                    &a.to_lineq(
-                        a.ids.iter().map(
-                            |id| {
-                                var_hm.get(id).expect(
-                                    &format!(
-                                        "got id `{id}` in expression {a} that was not in theory"
-                                    )
-                                ).bounds
-                            }
-                        ).collect()
-                    )
-                ),
-                None => None
-            }
-        ).collect();
-    }
+        let state_hm: HashMap<u32, &Statement> = self._statement_hm();
+        let mut lineqs: Vec<GeLineq> = Vec::default();
+        let mut queue: Vec<u32> = vec![top_node_id];
 
+        while let Some(id) = queue.pop() {
+            if let Some(statement) = state_hm.get(&id) {
+                let pot_lineq = match &statement.expression {
+                    Some(a) => match reduced {
+                        true => Some(
+                            a.to_lineq_reduced(
+                                top_node_id == statement.variable.id, 
+                                statement.variable,
+                                &var_hm,
+                                &state_hm,
+                            )
+                        ),
+                        false => Some(a.to_lineq_expressed(statement.variable, &var_hm))
+                    },
+                    None => None
+                };
+
+                if let Some(act_lineq) = pot_lineq {
+                    queue.append(&mut act_lineq.indices.clone().into_iter().filter(|i| (*i) != statement.variable.id).collect());
+                    lineqs.push(act_lineq);
+                }
+            }
+        }
+        return lineqs;
+    }
     // fn to_lineqs_red(&self) -> Vec<GeLineq> {
     //     let state_hm: HashMap<u32, &Statement> = self.statement_hm();
     //     let queue: Vec<u32> = vec![*self.top()];
@@ -671,6 +768,284 @@ mod tests {
     use std::vec;
 
     use super::*;
+
+    #[test]
+    fn test_theory_to_lineqs_reduced() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let actual: Vec<GeLineq> = t.to_lineqs(true);
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: 3,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![-3,-3,1,1,1],
+                indices: vec![3,4,5,6,7]
+            },
+        ];
+        assert!(actual.iter().zip(expected.iter()).all(|ae| {
+            let bias_ok = ae.0.bias == ae.1.bias;
+            let bounds_ok = ae.0.bounds == ae.1.bounds;
+            let indices_ok = ae.0.indices == ae.1.indices;
+            let coeffs_ok = ae.0.coeffs == ae.1.coeffs;
+            return bias_ok && bounds_ok && indices_ok && coeffs_ok;
+        }));
+        
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: 0
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let actual: Vec<GeLineq> = t.to_lineqs(true);
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: -3,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![-4,-4,1,1,1],
+                indices: vec![3,4,5,6,7]
+            },
+        ];
+        assert!(actual.iter().zip(expected.iter()).all(|ae| {
+            let bias_ok = ae.0.bias == ae.1.bias;
+            let bounds_ok = ae.0.bounds == ae.1.bounds;
+            let indices_ok = ae.0.indices == ae.1.indices;
+            let coeffs_ok = ae.0.coeffs == ae.1.coeffs;
+            return bias_ok && bounds_ok && indices_ok && coeffs_ok;
+        }));
+        
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![7,8],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![9,10],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![11],
+                            bias: 0
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![12,13],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 8, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 9, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 10, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 11, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 12, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 13, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let actual: Vec<GeLineq> = t.to_lineqs(true);
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: -7,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![3,3,1,1],
+                indices: vec![3,4,5,6]
+            },
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-2,1,1],
+                indices: vec![6,12,13]
+            },
+            GeLineq {
+                bias: 1,
+                bounds: vec![(0,1),(0,1)],
+                coeffs: vec![-1,-1],
+                indices: vec![5,11]
+            },
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-1,1,1],
+                indices: vec![4,9,10]
+            },
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-1,1,1],
+                indices: vec![3,7,8]
+            },
+        ];
+        assert!(actual.iter().zip(expected.iter()).all(|ae| {
+            let bias_ok = ae.0.bias == ae.1.bias;
+            let bounds_ok = ae.0.bounds == ae.1.bounds;
+            let indices_ok = ae.0.indices == ae.1.indices;
+            let coeffs_ok = ae.0.coeffs == ae.1.coeffs;
+            return bias_ok && bounds_ok && indices_ok && coeffs_ok;
+        }));
+    }
 
     #[test]
     fn test_logic(){
@@ -1690,13 +2065,13 @@ mod tests {
                 },
             ]
         };
-        let actual: Vec<GeLineq> = t.to_lineqs();
+        let actual: Vec<GeLineq> = t.to_lineqs(false);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
                 bias: 0,
                 bounds: vec![(0,1),(0,1),(0,1)],
-                coeffs: vec![-1,1,1],
-                indices: vec![0,1,2]
+                coeffs: vec![1,1],
+                indices: vec![1,2]
             },
             GeLineq {
                 bias: 2,
