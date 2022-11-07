@@ -547,14 +547,18 @@ impl AtLeast {
         }
     }
 
-    fn to_lineq_expressed(&self, variable: Variable, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
-        return GeLineq::merge_disj(
-            &variable.to_lineq_neg(),
-            &self.to_lineq(variable_hm)
-        ).expect("could not merge disjunctions") // <- should always be able to merge here
+    fn to_lineq_expressed(&self, extended: bool, variable: Variable, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
+        if extended {
+            return GeLineq::merge_disj(
+                &variable.to_lineq_neg(),
+                &self.to_lineq(variable_hm)
+            ).expect("could not merge disjunctions") // <- should always be able to merge here
+        } else {
+            return self.to_lineq(variable_hm);
+        }
     }
 
-    fn to_lineq_reduced(&self, top: bool, variable: Variable, variable_hm: &HashMap<u32, Variable>, statement_hm: &HashMap<u32, &Statement>) -> GeLineq {
+    fn to_lineq_reduced(&self, extended: bool, variable: Variable, variable_hm: &HashMap<u32, Variable>, statement_hm: &HashMap<u32, &Statement>) -> GeLineq {
         return match (self.bias, self.ids.len()) {
             (-1, 2) => {
                 let sub_lineqs: Vec<GeLineq> = self.ids.iter().filter_map(|id| {
@@ -569,10 +573,10 @@ impl AtLeast {
                     if let Some(lineq) = GeLineq::merge_disj(&sub_lineqs[0], &sub_lineqs[1]) {
                         return lineq;
                     } else {
-                        return self.to_lineq_expressed(variable, variable_hm)
+                        return self.to_lineq_expressed(extended, variable, variable_hm);
                     }
                 } else {
-                    return self.to_lineq_expressed(variable, variable_hm);
+                    return self.to_lineq_expressed(extended, variable, variable_hm);
                 }
             },
             (-2, 2) => {
@@ -588,16 +592,13 @@ impl AtLeast {
                     if let Some(lineq) = GeLineq::merge_conj(&sub_lineqs[0], &sub_lineqs[1]) {
                         return lineq;
                     } else {
-                        return self.to_lineq_expressed(variable, variable_hm)
+                        return self.to_lineq_expressed(extended, variable, variable_hm)
                     }
                 } else {
-                    return self.to_lineq_expressed(variable, variable_hm);
+                    return self.to_lineq_expressed(extended, variable, variable_hm);
                 }
             },
-            _ => match top {
-                true => self.to_lineq(variable_hm),
-                false => self.to_lineq_expressed(variable, variable_hm)
-            }
+            _ => self.to_lineq_expressed(extended, variable, variable_hm)
         }
     }
 }
@@ -716,13 +717,13 @@ impl Theory {
     ///         },
     ///     ]
     /// };
-    /// let actual: Vec<GeLineq> = theory.to_lineqs(false);
+    /// let actual: Vec<GeLineq> = theory.to_lineqs(true, false);
     /// assert_eq!(actual.len(), 1);
     /// assert_eq!(actual[0].bias, 0);
     /// assert_eq!(actual[0].coeffs, vec![-1,1,1]);
     /// assert_eq!(actual[0].indices, vec![0,1,2]);
     /// ```
-    pub fn to_lineqs(&self, reduced: bool) -> Vec<GeLineq> {
+    pub fn to_lineqs(&self, active: bool, reduced: bool) -> Vec<GeLineq> {
         let top_node_id = *self._top();
         let var_hm: HashMap<u32, Variable> = self._variable_hm();
         let state_hm: HashMap<u32, &Statement> = self._statement_hm();
@@ -735,13 +736,13 @@ impl Theory {
                     Some(a) => match reduced {
                         true => Some(
                             a.to_lineq_reduced(
-                                top_node_id == statement.variable.id, 
+                                !((top_node_id == statement.variable.id) & active), 
                                 statement.variable,
                                 &var_hm,
                                 &state_hm,
                             )
                         ),
-                        false => Some(a.to_lineq_expressed(statement.variable, &var_hm))
+                        false => Some(a.to_lineq_expressed(!((top_node_id == statement.variable.id) & active), statement.variable, &var_hm))
                     },
                     None => None
                 };
@@ -754,13 +755,6 @@ impl Theory {
         }
         return lineqs;
     }
-    // fn to_lineqs_red(&self) -> Vec<GeLineq> {
-    //     let state_hm: HashMap<u32, &Statement> = self.statement_hm();
-    //     let queue: Vec<u32> = vec![*self.top()];
-    //     while queue.len() > 0 {
-    //         current_statement : &Statement = queue
-    //     }
-    // }
 }
 
 #[cfg(test)]
@@ -771,6 +765,234 @@ mod tests {
 
     #[test]
     fn test_theory_to_lineqs_reduced() {
+
+        fn lineqs_eq(actual: Vec<GeLineq>, expected: Vec<GeLineq>) -> bool {
+            return actual.iter().zip(expected.iter()).all(|ae| {
+                let bias_ok = ae.0.bias == ae.1.bias;
+                let bounds_ok = ae.0.bounds == ae.1.bounds;
+                let indices_ok = ae.0.indices == ae.1.indices;
+                let coeffs_ok = ae.0.coeffs == ae.1.coeffs;
+                return bias_ok && bounds_ok && indices_ok && coeffs_ok;
+            });
+        }
+
+        // Depth 3
+        // 0: 1 & 2
+        // 1: 3 + 4 >= 6 (3 has bounds (-5,5), 4 is bool) 
+        // 2: 5 + 6 >= 5 (5 has bounds (-3,3), 6 is bool) 
+
+        // Expected constraints:
+        // 4( x) +( y) -41
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: -6
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -4
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (-5,5) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (-3,3) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let actual: Vec<GeLineq> = t.to_lineqs(true, true);
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: -34,
+                bounds: vec![(-5,5),(0,1),(-3,3),(0,1)],
+                coeffs: vec![5,5,1,1],
+                indices: vec![3,4,5,6]
+            },
+        ];
+        assert!(lineqs_eq(actual, expected));
+
+        // Depth 4
+        // 0: 1 & 2 & 3
+        // 1: 4 | 5
+        // 2: 5 | 6
+        // 3: 7 & 8
+        // 4: 9 & 10
+        // 5: -11
+        // 6: 12 | 13
+
+        // We test two things:
+        // 1) sharing variable works (both 1 and 2 has 5 as child and is reducable)
+        // 2) direct reducement works (0 and 3 has same constraint, therefore 0 should have 7 and 8 directly as children)  <- NOT IMPLEMENTED
+
+        // Expected constraints:
+        //   ( 1) +( 2) +( 3) -3
+        // -2( 3) +( 7) +( 8) +0
+        // -1(11) +(12) +(13) +0 (instead of 5 & 6)
+        //   ( 9) +(10)-2(11) +0 (instead of 4 & 5)
+
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2,3],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![4,5],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![7,8],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![9,10],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![11],
+                            bias: 0
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![12,13],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 8, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 9, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 10, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 11, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 12, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 13, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let actual: Vec<GeLineq> = t.to_lineqs(true, true);
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: -3,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![1,1,1],
+                indices: vec![1,2,3]
+            },
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-2,1,1],
+                indices: vec![3,7,8]
+            },
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-1,1,1],
+                indices: vec![11,12,13]
+            },
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-2,1,1],
+                indices: vec![11,9,10]
+            },
+        ];
+        assert!(lineqs_eq(actual, expected));
+
+        // Depth 3
+        // 0: 1 -> 2
+        // 1: 3 & 4
+        // 2: 5 & 6 & 7
+        // Expects to be reduced into 1 constraint
+        // -3(3)-3(4)+(5)+(6)+(7)-3 >= 0 
+
         let t = Theory {
             id: String::from("A"),
             statements: vec![
@@ -823,7 +1045,7 @@ mod tests {
                 },
             ]
         };
-        let actual: Vec<GeLineq> = t.to_lineqs(true);
+        let actual: Vec<GeLineq> = t.to_lineqs(true, true);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
                 bias: 3,
@@ -832,14 +1054,15 @@ mod tests {
                 indices: vec![3,4,5,6,7]
             },
         ];
-        assert!(actual.iter().zip(expected.iter()).all(|ae| {
-            let bias_ok = ae.0.bias == ae.1.bias;
-            let bounds_ok = ae.0.bounds == ae.1.bounds;
-            let indices_ok = ae.0.indices == ae.1.indices;
-            let coeffs_ok = ae.0.coeffs == ae.1.coeffs;
-            return bias_ok && bounds_ok && indices_ok && coeffs_ok;
-        }));
+        assert!(lineqs_eq(actual, expected));
         
+        // Depth 3
+        // 0: 1 & 2
+        // 1: -3 | -4
+        // 2: 5 & 6 & 7
+        // Expects to be reduced into 1 constraint
+        // -4(3)-4(4)+(5)+(6)+(7) -3 >= 0
+
         let t = Theory {
             id: String::from("A"),
             statements: vec![
@@ -892,7 +1115,7 @@ mod tests {
                 },
             ]
         };
-        let actual: Vec<GeLineq> = t.to_lineqs(true);
+        let actual: Vec<GeLineq> = t.to_lineqs(true, true);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
                 bias: -3,
@@ -901,14 +1124,26 @@ mod tests {
                 indices: vec![3,4,5,6,7]
             },
         ];
-        assert!(actual.iter().zip(expected.iter()).all(|ae| {
-            let bias_ok = ae.0.bias == ae.1.bias;
-            let bounds_ok = ae.0.bounds == ae.1.bounds;
-            let indices_ok = ae.0.indices == ae.1.indices;
-            let coeffs_ok = ae.0.coeffs == ae.1.coeffs;
-            return bias_ok && bounds_ok && indices_ok && coeffs_ok;
-        }));
+        assert!(lineqs_eq(actual, expected));
         
+        // Depth 4
+        // 0: 1 & 2
+        // 1: 3 & 4
+        // 2: 5 | 6
+        // 3: 7 | 8
+        // 4: 9 | 10
+        // 5: -11
+        // 6: 12 & 13
+
+        // Expects to be reduced into 5 constraints
+        // Notice since 0 constraint has 2 subs, it gets
+        // reduced before 1 and 2 could be reduced. Because
+        // of that, we don't get a minimum number of constraints.
+        //  3( 3) +3( 4) +( 5) +( 6) +( 7) -7
+        // -2( 6) +3(12) +(13) +0
+        // -1( 5) -1(11) +1
+        // -1( 4) +1( 9) +(10) +0
+        // -1( 3) +1( 7) +( 8) +0
         let t = Theory {
             id: String::from("A"),
             statements: vec![
@@ -1005,7 +1240,7 @@ mod tests {
                 },
             ]
         };
-        let actual: Vec<GeLineq> = t.to_lineqs(true);
+        let actual: Vec<GeLineq> = t.to_lineqs(true, true);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
                 bias: -7,
@@ -1038,13 +1273,7 @@ mod tests {
                 indices: vec![3,7,8]
             },
         ];
-        assert!(actual.iter().zip(expected.iter()).all(|ae| {
-            let bias_ok = ae.0.bias == ae.1.bias;
-            let bounds_ok = ae.0.bounds == ae.1.bounds;
-            let indices_ok = ae.0.indices == ae.1.indices;
-            let coeffs_ok = ae.0.coeffs == ae.1.coeffs;
-            return bias_ok && bounds_ok && indices_ok && coeffs_ok;
-        }));
+        assert!(lineqs_eq(actual, expected));
     }
 
     #[test]
@@ -2065,13 +2294,19 @@ mod tests {
                 },
             ]
         };
-        let actual: Vec<GeLineq> = t.to_lineqs(false);
+        let actual: Vec<GeLineq> = t.to_lineqs(false, false);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
                 bias: 0,
                 bounds: vec![(0,1),(0,1),(0,1)],
-                coeffs: vec![1,1],
-                indices: vec![1,2]
+                coeffs: vec![-1,1,1],
+                indices: vec![0,1,2]
+            },
+            GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-3,1,1,1],
+                indices: vec![2,5,6,7]
             },
             GeLineq {
                 bias: 2,
@@ -2079,14 +2314,49 @@ mod tests {
                 coeffs: vec![-1,-1,-1],
                 indices: vec![1,3,4]
             },
+        ];
+        assert!(actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias));
+        let actual: Vec<GeLineq> = t.to_lineqs(true, false);
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: -1,
+                bounds: vec![(0,1),(0,1)],
+                coeffs: vec![1,1],
+                indices: vec![1,2]
+            },
             GeLineq {
                 bias: 0,
                 bounds: vec![(0,1),(0,1),(0,1),(0,1)],
                 coeffs: vec![-3,1,1,1],
                 indices: vec![2,5,6,7]
             },
+            GeLineq {
+                bias: 2,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-1,-1,-1],
+                indices: vec![1,3,4]
+            },
         ];
-        let test_ok = actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias);
-        assert!(test_ok);
+        assert!(actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias));
+        let actual: Vec<GeLineq> = t.to_lineqs(false, true); // reduce overrides active
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: 3,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![-3,-3,1,1,1],
+                indices: vec![3,4,5,6,7]
+            },
+        ];
+        assert!(actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias));
+        let actual: Vec<GeLineq> = t.to_lineqs(true, true); // same as previous
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: 3,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![-3,-3,1,1,1],
+                indices: vec![3,4,5,6,7]
+            },
+        ];
+        assert!(actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias));
     }
 }
