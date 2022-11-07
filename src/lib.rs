@@ -519,12 +519,17 @@ impl AtLeast {
     /// ```
     /// use puanrs::AtLeast;
     /// use puanrs::GeLineq;
+    /// use puanrs::Variable;
+    /// use std::{collections::HashMap};
     /// let at_least: AtLeast = AtLeast {
     ///     ids     : vec![0,1,2],
     ///     bias   : -1,
     /// };
-    /// let variable_bounds: Vec<(i64,i64)> = vec![(0,1),(0,1),(0,1)];
-    /// let actual: GeLineq = at_least.to_lineq(variable_bounds);
+    /// let mut variable_hm: HashMap<u32, Variable> = HashMap::default();
+    /// variable_hm.insert(0, Variable {id: 0, bounds: (0,1)});
+    /// variable_hm.insert(1, Variable {id: 1, bounds: (0,1)});
+    /// variable_hm.insert(2, Variable {id: 2, bounds: (0,1)});
+    /// let actual: GeLineq = at_least.to_lineq(&variable_hm);
     /// assert_eq!(actual.coeffs, vec![1,1,1]);
     /// assert_eq!(actual.bias, -1);
     /// assert_eq!(actual.bounds, vec![(0,1),(0,1),(0,1)]);
@@ -717,7 +722,7 @@ impl Theory {
     ///         },
     ///     ]
     /// };
-    /// let actual: Vec<GeLineq> = theory.to_lineqs(true, false);
+    /// let actual: Vec<GeLineq> = theory.to_lineqs(false, false);
     /// assert_eq!(actual.len(), 1);
     /// assert_eq!(actual[0].bias, 0);
     /// assert_eq!(actual[0].coeffs, vec![-1,1,1]);
