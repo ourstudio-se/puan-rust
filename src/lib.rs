@@ -653,7 +653,7 @@ impl Theory {
         return id_curr;
     }
 
-    // All bottom / atomic variable ids. E.i. statements that don't have any children.
+    // All bottom / atomic variable ids, e.i. statements that don't have any children.
     fn _bottoms(&self) -> Vec<&u32> {
         return self.statements.iter().filter_map(
             |statement| {
