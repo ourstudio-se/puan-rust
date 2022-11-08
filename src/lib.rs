@@ -833,7 +833,7 @@ mod tests {
         // Depth 3
         // 0: 1 & 2
         // 1: 3 + 4 >= 6 (3 has bounds (-5,5), 4 is bool) 
-        // 2: 5 + 6 >= 5 (5 has bounds (-3,3), 6 is bool) 
+        // 2: 5 + 6 >= 4 (5 has bounds (-3,3), 6 is bool) 
 
         // Expected constraints:
         // 4( x) +( y) -41
