@@ -525,7 +525,7 @@ impl AtLeast {
     }
 
     /// Transforms into a linear inequality constraint. If sub constraints fulfills certain requirements, then the sub constraints
-    /// will be merged into this constraint. If requirements is not met, then `to_lineq_extended` is called. 
+    /// will be merged into this constraint. If the requirements are not met, then `to_lineq_extended` is called. 
     fn to_lineq_reduced(&self, extend_default: bool, given_id: u32, variable_hm: &HashMap<u32, Variable>, statement_hm: &HashMap<u32, &Statement>) -> GeLineq {
         return match (self.bias, self.ids.len()) {
             (-1, 2) => {
