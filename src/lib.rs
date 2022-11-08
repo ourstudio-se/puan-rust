@@ -6,7 +6,9 @@ use std::hash::Hash;
 use std::{collections::HashMap};
 use std::fmt::Display;
 use itertools::iproduct;
+use std::ops::Range;
 use std::cmp;
+use itertools::Itertools;
 
 pub mod solver;
 pub mod linalg;
@@ -413,26 +415,6 @@ impl GeLineq {
         
         
     }
-fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
-    let mut candidates: Vec<[u32;2]> = pairs.to_vec();
-    let mut solution: Vec<[u32;2]> = Vec::new();
-
-    while candidates.len() > 0 {
-        let selected: [u32;2] = candidates.pop().expect("empty candidates in select_check function");
-        candidates = candidates.iter().filter(
-            |candidate| {
-                iproduct!(selected.iter(), candidate.iter()).map(
-                    |comb| {
-                        *comb.0!=*comb.1
-                    }
-                ).all(|x: bool| x)
-            }
-        ).map(|x| *x).collect();
-        solution.push(selected);
-    }
-
-    return solution;
-}
 
 /// Variable data structure has two properties, "id" and "bounds". An instance of Variable
 /// is used to reference to Statement or an input into a Theory. 
@@ -511,8 +493,7 @@ impl AtLeast {
     }
 
     /// Transform into a linear inequality constraint.
-    /// `variable_bounds` are the lower and upper bound for each variable
-    /// in `ids`.
+    /// `variable_hm` is a hash map of id's and variables.
     /// 
     /// # Example:
     /// 
@@ -552,18 +533,40 @@ impl AtLeast {
         }
     }
 
-    fn to_lineq_expressed(&self, extended: bool, variable: Variable, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
-        if extended {
-            return GeLineq::merge_disj(
-                &variable.to_lineq_neg(),
-                &self.to_lineq(variable_hm)
-            ).expect("could not merge disjunctions") // <- should always be able to merge here
-        } else {
-            return self.to_lineq(variable_hm);
-        }
+    /// Transforms into a linear inequality constraint. Unlike `to_lineq` this is extended to include the given variable
+    /// such that it holds logic as "if `given_id` is true then `self` must be true".
+    /// 
+    /// # Example:
+    /// 
+    /// ```
+    /// use puanrs::AtLeast;
+    /// use puanrs::GeLineq;
+    /// use puanrs::Variable;
+    /// use std::{collections::HashMap};
+    /// let at_least: AtLeast = AtLeast {
+    ///     ids     : vec![0,1,2],
+    ///     bias   : -1,
+    /// };
+    /// let mut variable_hm: HashMap<u32, Variable> = HashMap::default();
+    /// variable_hm.insert(0, Variable {id: 0, bounds: (0,1)});
+    /// variable_hm.insert(1, Variable {id: 1, bounds: (0,1)});
+    /// variable_hm.insert(2, Variable {id: 2, bounds: (0,1)});
+    /// let actual: GeLineq = at_least.to_lineq_extended(0, &variable_hm);
+    /// assert_eq!(actual.coeffs, vec![-1,1,1]);
+    /// assert_eq!(actual.bias, 0);
+    /// assert_eq!(actual.bounds, vec![(0,1),(0,1),(0,1)]);
+    /// assert_eq!(actual.indices, vec![0,1,2]);
+    /// ```
+    fn to_lineq_extended(&self, given_id: u32, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
+        return GeLineq::merge_disj(
+            &(variable_hm.get(&given_id).expect(&format!("variable id `{given_id}` does not exist in variable hash map"))).to_lineq_neg(),
+            &self.to_lineq(variable_hm)
+        ).expect("could not merge disjunctions") // <- should always be able to merge here
     }
 
-    fn to_lineq_reduced(&self, extended: bool, variable: Variable, variable_hm: &HashMap<u32, Variable>, statement_hm: &HashMap<u32, &Statement>) -> GeLineq {
+    /// Transforms into a linear inequality constraint. If sub constraints fulfills certain requirements, then the sub constraints
+    /// will be merged into this constraint. If requirements is not met, then `to_lineq_extended` is called. 
+    fn to_lineq_reduced(&self, extend_default: bool, given_id: u32, variable_hm: &HashMap<u32, Variable>, statement_hm: &HashMap<u32, &Statement>) -> GeLineq {
         return match (self.bias, self.ids.len()) {
             (-1, 2) => {
                 let sub_lineqs: Vec<GeLineq> = self.ids.iter().filter_map(|id| {
@@ -578,10 +581,16 @@ impl AtLeast {
                     if let Some(lineq) = GeLineq::merge_disj(&sub_lineqs[0], &sub_lineqs[1]) {
                         return lineq;
                     } else {
-                        return self.to_lineq_expressed(extended, variable, variable_hm);
+                        return match extend_default {
+                            false => self.to_lineq(variable_hm),
+                            true => self.to_lineq_extended(given_id, variable_hm),
+                        }
                     }
                 } else {
-                    return self.to_lineq_expressed(extended, variable, variable_hm);
+                    return match extend_default {
+                        false => self.to_lineq(variable_hm),
+                        true => self.to_lineq_extended(given_id, variable_hm),
+                    }
                 }
             },
             (-2, 2) => {
@@ -597,13 +606,22 @@ impl AtLeast {
                     if let Some(lineq) = GeLineq::merge_conj(&sub_lineqs[0], &sub_lineqs[1]) {
                         return lineq;
                     } else {
-                        return self.to_lineq_expressed(extended, variable, variable_hm)
+                        return match extend_default {
+                            false => self.to_lineq(variable_hm),
+                            true => self.to_lineq_extended(given_id, variable_hm),
+                        }
                     }
                 } else {
-                    return self.to_lineq_expressed(extended, variable, variable_hm);
+                    return match extend_default {
+                        false => self.to_lineq(variable_hm),
+                        true => self.to_lineq_extended(given_id, variable_hm),
+                    }
                 }
             },
-            _ => self.to_lineq_expressed(extended, variable, variable_hm)
+            _ => match extend_default {
+                false => self.to_lineq(variable_hm),
+                true => self.to_lineq_extended(given_id, variable_hm),
+            }
         }
     }
 }
@@ -741,13 +759,13 @@ impl Theory {
                     Some(a) => match reduced {
                         true => Some(
                             a.to_lineq_reduced(
-                                !((top_node_id == statement.variable.id) & active), 
-                                statement.variable,
+                                !((statement.variable.id == top_node_id) & active), 
+                                statement.variable.id,
                                 &var_hm,
                                 &state_hm,
                             )
                         ),
-                        false => Some(a.to_lineq_expressed(!((top_node_id == statement.variable.id) & active), statement.variable, &var_hm))
+                        false => Some(a.to_lineq_extended(statement.variable.id, &var_hm))
                     },
                     None => None
                 };
@@ -768,17 +786,45 @@ mod tests {
 
     use super::*;
 
+    // Validates all combinations generated from `variable_bounds` in two vectors, lineqs0 och lineqs1, of GeLineq data types. 
+    // `all_relation` how the results from lineqs0 and lineqs1 relates. If `all_relation` is true then either both 
+    fn validate_all_combinations(variable_bounds: Vec<(u32, (i64, i64))>, lineqs0: Vec<GeLineq>, lineqs1: Vec<GeLineq>, all_relation: bool) -> bool {
+
+        let base : i64 = 2;
+        let max_combinations: i64 = base.pow(15);
+        let bound_ranges: Vec<std::ops::Range<i64>> = variable_bounds.iter().map(|x| Range {start: x.1.0, end: x.1.1+1}).collect_vec();
+        let n_combinations : i64 = variable_bounds.iter().map(|x| (x.1.1+1)-x.1.0).product();
+        if n_combinations > max_combinations {
+            panic!("number of combinations ({n_combinations}) to test are more than allowed ({max_combinations})");
+        }
+
+        return bound_ranges.into_iter().multi_cartesian_product().all(|combination| {
+            let variable_ids : Vec<u32> = variable_bounds.iter().map(|x| x.0).collect_vec();
+            let variable_combination: Vec<(u32, i64)> = variable_ids.into_iter().zip(combination).collect();
+
+            let res0: bool;
+            let res1: bool;
+            if all_relation {
+                res0 = lineqs0.iter().all(|x| x.satisfied(variable_combination.clone()));
+                res1 = lineqs1.iter().all(|x| x.satisfied(variable_combination.clone()));
+            } else {
+                res0 = lineqs0.iter().any(|x| x.satisfied(variable_combination.clone()));
+                res1 = lineqs1.iter().any(|x| x.satisfied(variable_combination.clone()));
+            }
+            return (res0 & res1) | !(res0 & res1);
+        })
+    }
+
     #[test]
     fn test_theory_to_lineqs_reduced() {
 
-        fn lineqs_eq(actual: Vec<GeLineq>, expected: Vec<GeLineq>) -> bool {
-            return actual.iter().zip(expected.iter()).all(|ae| {
-                let bias_ok = ae.0.bias == ae.1.bias;
-                let bounds_ok = ae.0.bounds == ae.1.bounds;
-                let indices_ok = ae.0.indices == ae.1.indices;
-                let coeffs_ok = ae.0.coeffs == ae.1.coeffs;
-                return bias_ok && bounds_ok && indices_ok && coeffs_ok;
-            });
+        fn validate(t: Theory, actual: Vec<GeLineq>, expected: Vec<GeLineq>) -> bool {
+            return validate_all_combinations(
+                t.statements.into_iter().map(|x| (x.variable.id, x.variable.bounds)).collect(), 
+                actual, 
+                expected, 
+                true
+            )
         }
 
         // Depth 3
@@ -845,7 +891,7 @@ mod tests {
                 indices: vec![3,4,5,6]
             },
         ];
-        assert!(lineqs_eq(actual, expected));
+        assert!(validate(t, actual, expected));
 
         // Depth 4
         // 0: 1 & 2 & 3
@@ -989,7 +1035,7 @@ mod tests {
                 indices: vec![11,9,10]
             },
         ];
-        assert!(lineqs_eq(actual, expected));
+        assert!(validate(t, actual, expected));
 
         // Depth 3
         // 0: 1 -> 2
@@ -1059,7 +1105,7 @@ mod tests {
                 indices: vec![3,4,5,6,7]
             },
         ];
-        assert!(lineqs_eq(actual, expected));
+        assert!(validate(t, actual, expected));
         
         // Depth 3
         // 0: 1 & 2
@@ -1129,7 +1175,7 @@ mod tests {
                 indices: vec![3,4,5,6,7]
             },
         ];
-        assert!(lineqs_eq(actual, expected));
+        assert!(validate(t, actual, expected));
         
         // Depth 4
         // 0: 1 & 2
@@ -1278,11 +1324,43 @@ mod tests {
                 indices: vec![3,7,8]
             },
         ];
-        assert!(lineqs_eq(actual, expected));
+        assert!(validate(t, actual, expected));
     }
 
     #[test]
-    fn test_logic(){
+    fn test_merge_conj_disj(){
+
+        fn validate(ge_lineq1: GeLineq, ge_lineq2: GeLineq, conj: bool) -> bool {
+            let mut variable_bounds_hm: HashMap<u32, (i64,i64)> = HashMap::default();
+            for lineq in vec![ge_lineq1.clone(), ge_lineq2.clone()] {
+                for (id, bound) in lineq.indices.iter().zip(lineq.bounds) {
+                    variable_bounds_hm.insert(*id, bound);
+                }
+            }
+            let variable_bounds = variable_bounds_hm.into_iter().collect();
+            if conj {
+                if let Some(merged) = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2) {
+                    return validate_all_combinations(
+                        variable_bounds, 
+                        vec![ge_lineq1, ge_lineq2], 
+                        vec![merged], 
+                        true
+                    );
+                }
+                return false;
+            } else {
+                if let Some(merged) = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2) {
+                    return validate_all_combinations(
+                        variable_bounds, 
+                        vec![ge_lineq1, ge_lineq2], 
+                        vec![merged], 
+                        false
+                    );
+                }
+                return false;
+            }
+        }
+
         // Disjunction merge between 1-1
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1296,11 +1374,9 @@ mod tests {
             bias    : -1,
             indices : vec![1, 6]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l) in iproduct!(0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(6,l)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(6,l)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(6,l)]));
-
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, false));
+        
+        // }
         // Disjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1314,11 +1390,8 @@ mod tests {
             bias    : 0,
             indices : vec![1, 2, 3, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l) in iproduct!(0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(8,l)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(8,l)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(8,l)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-1
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1332,11 +1405,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-2
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1350,11 +1420,8 @@ mod tests {
             bias    : 3,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1368,11 +1435,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1386,11 +1450,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-5
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1404,11 +1465,8 @@ mod tests {
             bias    : -2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-6
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1422,11 +1480,8 @@ mod tests {
             bias    : 2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-2
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1440,11 +1495,8 @@ mod tests {
             bias    : 3,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1458,11 +1510,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1476,11 +1525,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-5
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1494,11 +1540,8 @@ mod tests {
             bias    : -2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-6
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1512,11 +1555,8 @@ mod tests {
             bias    : 2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, false));
 
-        }
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1530,11 +1570,8 @@ mod tests {
             bias    : -3,
             indices : vec![1, 0, 4]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(4,l), (0,m)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(4,l), (0,m)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(4,l), (0,m)]));
-            
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1548,11 +1585,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-            
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 1-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1566,11 +1600,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-            
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1584,10 +1615,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 2-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1601,10 +1630,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 3-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1618,10 +1645,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 3-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1635,10 +1660,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 3-5
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1652,11 +1675,8 @@ mod tests {
             bias    : -2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
+        assert!(validate(ge_lineq1, ge_lineq2, true));
 
-        }
         // Conjunction merge between 3-6
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1670,10 +1690,8 @@ mod tests {
             bias    : 2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1687,10 +1705,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-5
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1704,10 +1720,8 @@ mod tests {
             bias    : -2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-6
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1721,10 +1735,8 @@ mod tests {
             bias    : 2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1738,10 +1750,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
+
         // Disjunction merge, special case
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1755,10 +1765,8 @@ mod tests {
             bias    : -1,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(-2..0, 2..4, 2..4, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, false));
+
         // Conjunction merge, special case
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1772,11 +1780,9 @@ mod tests {
             bias    : -1,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(-2..0, 2..4, 2..4, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate(ge_lineq1, ge_lineq2, true));
     }
+    
     #[test]
     fn test_substitution() {
         // Negative bias on sub lineq
@@ -2015,34 +2021,6 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_select_check_fn() {
-        assert_eq!(
-            select_check(vec![[0,1],[1,2],[3,4],[5,6]]),
-            vec![[5,6],[3,4],[1,2]]
-        );
-        
-        let empty : Vec<[u32;2]> = Vec::new();
-        assert_eq!(
-            select_check(vec![]),
-            empty
-        );
-
-        assert_eq!(
-            select_check(vec![[0,0],[1,1]]),
-            vec![[1,1],[0,0]]
-        );
-
-        assert_eq!(
-            select_check(vec![[1,2],[3,4],[2,5],[3,6]]),
-            vec![[3,6],[2,5]]
-        );
-
-        assert_eq!(
-            select_check(vec![[3,1],[2,0],[0,1]]),
-            vec![[0,1]]
-        );
-    }
 
     #[test]
     fn test_theory_top_ok() {
