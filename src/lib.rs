@@ -592,7 +592,7 @@ impl Display for AtLeast {
     }
 }
 
-/// A `Statement` is a declaration of a expression (or proposition) connected to a `Variable`.
+/// A `Statement` is a declaration of an expression (or proposition) connected to a `Variable`.
 /// For instance, "A is true iff x > 3, else false" is a statement. Currently only `AtLeast` is
 /// considered to be an `Expression`.
 pub struct Statement {
