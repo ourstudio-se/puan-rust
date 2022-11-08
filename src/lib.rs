@@ -535,27 +535,6 @@ impl AtLeast {
 
     /// Transforms into a linear inequality constraint. Unlike `to_lineq` this is extended to include the given variable
     /// such that it holds logic as "if `given_id` is true then `self` must be true".
-    /// 
-    /// # Example:
-    /// 
-    /// ```
-    /// use puanrs::AtLeast;
-    /// use puanrs::GeLineq;
-    /// use puanrs::Variable;
-    /// use std::{collections::HashMap};
-    /// let at_least: AtLeast = AtLeast {
-    ///     ids     : vec![0,1,2],
-    ///     bias   : -1,
-    /// };
-    /// let mut variable_hm: HashMap<u32, Variable> = HashMap::default();
-    /// variable_hm.insert(0, Variable {id: 0, bounds: (0,1)});
-    /// variable_hm.insert(1, Variable {id: 1, bounds: (0,1)});
-    /// variable_hm.insert(2, Variable {id: 2, bounds: (0,1)});
-    /// let actual: GeLineq = at_least.to_lineq_extended(0, &variable_hm);
-    /// assert_eq!(actual.coeffs, vec![-1,1,1]);
-    /// assert_eq!(actual.bias, 0);
-    /// assert_eq!(actual.bounds, vec![(0,1),(0,1),(0,1)]);
-    /// assert_eq!(actual.indices, vec![0,1,2]);
     /// ```
     fn to_lineq_extended(&self, given_id: u32, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
         return GeLineq::merge_disj(
@@ -640,10 +619,31 @@ pub struct Statement {
     pub expression  : Option<AtLeast>
 }
 
+impl Clone for Statement {
+    fn clone(&self) -> Self {
+        return Statement {
+            variable: self.variable.clone(),
+            expression: match &self.expression {
+                Some(exp) => Some(exp.clone()),
+                None => None
+            }
+        }
+    }
+}
+
 /// A `Theory` is a list of statements with a common name (id).
 pub struct Theory {
     pub id : String,
     pub statements : Vec<Statement>
+}
+
+impl Clone for Theory {
+    fn clone(&self) -> Self {
+        return Theory {
+            id: self.id.clone(),
+            statements: self.statements.to_vec()
+        }
+    }
 }
 
 impl Theory {
@@ -765,7 +765,10 @@ impl Theory {
                                 &state_hm,
                             )
                         ),
-                        false => Some(a.to_lineq_extended(statement.variable.id, &var_hm))
+                        false => match (statement.variable.id == top_node_id) & active {
+                            true => Some(a.to_lineq(&var_hm)),
+                            false => Some(a.to_lineq_extended(statement.variable.id, &var_hm))
+                        }
                     },
                     None => None
                 };
@@ -815,17 +818,17 @@ mod tests {
         })
     }
 
+    fn validate_theory_lineqs(t: Theory, actual: Vec<GeLineq>, expected: Vec<GeLineq>) -> bool {
+        return validate_all_combinations(
+            t.statements.into_iter().map(|x| (x.variable.id, x.variable.bounds)).collect(), 
+            actual, 
+            expected, 
+            true
+        )
+    }
+
     #[test]
     fn test_theory_to_lineqs_reduced() {
-
-        fn validate(t: Theory, actual: Vec<GeLineq>, expected: Vec<GeLineq>) -> bool {
-            return validate_all_combinations(
-                t.statements.into_iter().map(|x| (x.variable.id, x.variable.bounds)).collect(), 
-                actual, 
-                expected, 
-                true
-            )
-        }
 
         // Depth 3
         // 0: 1 & 2
@@ -891,7 +894,7 @@ mod tests {
                 indices: vec![3,4,5,6]
             },
         ];
-        assert!(validate(t, actual, expected));
+        assert!(validate_theory_lineqs(t, actual, expected));
 
         // Depth 4
         // 0: 1 & 2 & 3
@@ -1035,7 +1038,7 @@ mod tests {
                 indices: vec![11,9,10]
             },
         ];
-        assert!(validate(t, actual, expected));
+        assert!(validate_theory_lineqs(t, actual, expected));
 
         // Depth 3
         // 0: 1 -> 2
@@ -1105,7 +1108,7 @@ mod tests {
                 indices: vec![3,4,5,6,7]
             },
         ];
-        assert!(validate(t, actual, expected));
+        assert!(validate_theory_lineqs(t, actual, expected));
         
         // Depth 3
         // 0: 1 & 2
@@ -1175,7 +1178,7 @@ mod tests {
                 indices: vec![3,4,5,6,7]
             },
         ];
-        assert!(validate(t, actual, expected));
+        assert!(validate_theory_lineqs(t, actual, expected));
         
         // Depth 4
         // 0: 1 & 2
@@ -1324,7 +1327,7 @@ mod tests {
                 indices: vec![3,7,8]
             },
         ];
-        assert!(validate(t, actual, expected));
+        assert!(validate_theory_lineqs(t, actual, expected));
     }
 
     #[test]
@@ -2298,7 +2301,7 @@ mod tests {
                 indices: vec![1,3,4]
             },
         ];
-        assert!(actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias));
+        assert!(validate_theory_lineqs(t.clone(), actual, expected));
         let actual: Vec<GeLineq> = t.to_lineqs(true, false);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
@@ -2320,7 +2323,7 @@ mod tests {
                 indices: vec![1,3,4]
             },
         ];
-        assert!(actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias));
+        assert!(validate_theory_lineqs(t.clone(), actual, expected));
         let actual: Vec<GeLineq> = t.to_lineqs(false, true); // reduce overrides active
         let expected: Vec<GeLineq> = vec![
             GeLineq {
@@ -2330,7 +2333,7 @@ mod tests {
                 indices: vec![3,4,5,6,7]
             },
         ];
-        assert!(actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias));
+        assert!(validate_theory_lineqs(t.clone(), actual, expected));
         let actual: Vec<GeLineq> = t.to_lineqs(true, true); // same as previous
         let expected: Vec<GeLineq> = vec![
             GeLineq {
@@ -2340,6 +2343,6 @@ mod tests {
                 indices: vec![3,4,5,6,7]
             },
         ];
-        assert!(actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias));
+        assert!(validate_theory_lineqs(t.clone(), actual, expected));
     }
 }
