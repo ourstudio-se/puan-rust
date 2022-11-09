@@ -2173,6 +2173,13 @@ mod tests {
     fn test_theory_to_lineqs() {
 
         fn validate_theory_lineqs(t: Theory, actual: Vec<GeLineq>, expected: Vec<GeLineq>) -> bool {
+            assert!(actual.iter().zip(expected.clone()).all(|(a,b)| {
+                let bias_eq = a.bias == b.bias;
+                let indices_eq = a.indices == b.indices;
+                let coeffs_eq = a.coeffs == b.coeffs;
+                let bounds_eq = a.bounds == b.bounds;
+                bias_eq & indices_eq & coeffs_eq & bounds_eq
+            }));
             return validate_all_combinations(
                 t.statements.into_iter().map(|x| (x.variable.id, x.variable.bounds)).collect(), 
                 actual, 
@@ -2243,7 +2250,7 @@ mod tests {
             },
             GeLineq {
                 bias: 0,
-                bounds: vec![(0,1),(0,1),(0,1)],
+                bounds: vec![(0,1),(0,1),(0,1),(0,1)],
                 coeffs: vec![-3,1,1,1],
                 indices: vec![2,5,6,7]
             },
