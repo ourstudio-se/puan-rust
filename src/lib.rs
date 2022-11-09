@@ -5,7 +5,6 @@
 use std::hash::Hash;
 use std::{collections::HashMap};
 use std::fmt::Display;
-use itertools::iproduct;
 use std::cmp;
 
 pub mod solver;
@@ -20,6 +19,17 @@ pub struct GeLineq {
     pub bounds  : Vec<(i64, i64)>,
     pub bias    : i64,
     pub indices : Vec<u32>
+}
+
+impl Clone for GeLineq {
+    fn clone(&self) -> Self {
+        return GeLineq {
+            coeffs: self.coeffs.to_vec(),
+            bounds: self.bounds.to_vec(),
+            bias: self.bias,
+            indices: self.indices.to_vec(),
+        }
+    }
 }
 
 impl GeLineq {
@@ -46,22 +56,6 @@ impl GeLineq {
             }
         }
         return res;
-    }
-    
-    fn eqbounds(&self) -> (i64, i64) {
-        return (self._eqmin(), self._eqmax());
-    }
-    
-    fn satisfied(&self, variables: Vec<(u32, i64)>) -> bool{
-        let mut res = 0;
-        for i in 0..variables.len() {
-            for j in 0..self.coeffs.len() {
-                if self.indices[j] == variables[i].0 {
-                    res = res + self.coeffs[j]*variables[i].1;
-                }
-            }
-        }
-        return res + self.bias >= 0;
     }
     
     /// Takes two GeLineqs and merge those into one GeLineq under the condition that one of the GeLineqs must be satisfied.
@@ -402,30 +396,10 @@ impl GeLineq {
         
         
     }
-fn select_check(pairs: Vec<[u32;2]>) -> Vec<[u32;2]> {
-    let mut candidates: Vec<[u32;2]> = pairs.to_vec();
-    let mut solution: Vec<[u32;2]> = Vec::new();
-
-    while candidates.len() > 0 {
-        let selected: [u32;2] = candidates.pop().expect("empty candidates in select_check function");
-        candidates = candidates.iter().filter(
-            |candidate| {
-                iproduct!(selected.iter(), candidate.iter()).map(
-                    |comb| {
-                        *comb.0!=*comb.1
-                    }
-                ).all(|x: bool| x)
-            }
-        ).map(|x| *x).collect();
-        solution.push(selected);
-    }
-
-    return solution;
-}
 
 /// Variable data structure has two properties, "id" and "bounds". An instance of Variable
 /// is used to reference to Statement or an input into a Theory. 
-#[derive(Copy)]
+#[derive(Copy, Hash, Eq)]
 pub struct Variable {
     pub id      : u32,
     pub bounds  : (i64, i64)
@@ -437,6 +411,12 @@ impl Clone for Variable {
             id : self.id,
             bounds: self.bounds
         }
+    }
+}
+
+impl PartialEq for Variable {
+    fn eq(&self, other: &Self) -> bool {
+        return self.id == other.id;
     }
 }
 
@@ -478,6 +458,15 @@ pub struct AtLeast {
     pub bias   : i64,
 }
 
+impl Clone for AtLeast {
+    fn clone(&self) -> Self {
+        return AtLeast {
+            bias: self.bias,
+            ids: self.ids.to_vec(),
+        }
+    }
+}
+
 impl AtLeast {
 
     fn size(&self) -> usize {
@@ -485,31 +474,113 @@ impl AtLeast {
     }
 
     /// Transform into a linear inequality constraint.
-    /// `variable_bounds` are the lower and upper bound for each variable
-    /// in `ids`.
+    /// `variable_hm` is a hash map of id's and variables.
     /// 
     /// # Example:
     /// 
     /// ```
     /// use puanrs::AtLeast;
     /// use puanrs::GeLineq;
+    /// use puanrs::Variable;
+    /// use std::{collections::HashMap};
     /// let at_least: AtLeast = AtLeast {
     ///     ids     : vec![0,1,2],
     ///     bias   : -1,
     /// };
-    /// let variable_bounds: Vec<(i64,i64)> = vec![(0,1),(0,1),(0,1)];
-    /// let actual: GeLineq = at_least.to_lineq(variable_bounds);
+    /// let mut variable_hm: HashMap<u32, Variable> = HashMap::default();
+    /// variable_hm.insert(0, Variable {id: 0, bounds: (0,1)});
+    /// variable_hm.insert(1, Variable {id: 1, bounds: (0,1)});
+    /// variable_hm.insert(2, Variable {id: 2, bounds: (0,1)});
+    /// let actual: GeLineq = at_least.to_lineq(&variable_hm);
     /// assert_eq!(actual.coeffs, vec![1,1,1]);
     /// assert_eq!(actual.bias, -1);
     /// assert_eq!(actual.bounds, vec![(0,1),(0,1),(0,1)]);
     /// assert_eq!(actual.indices, vec![0,1,2]);
     /// ```
-    pub fn to_lineq(&self, variable_bounds: Vec<(i64,i64)>) -> GeLineq {
+    pub fn to_lineq(&self, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
         return GeLineq {
             coeffs: vec![match self.bias >= 0 {true => -1, false => 1}; self.size()],
             bias: self.bias,
-            bounds: variable_bounds,
+            bounds: self.ids.iter().map(
+                |id| {
+                    variable_hm.get(id).expect(
+                        &format!(
+                            "got id `{id}` in expression {self} that was not in theory"
+                        )
+                    ).bounds
+                }
+            ).collect(),
             indices: self.ids.to_vec()
+        }
+    }
+
+    /// Transforms into a linear inequality constraint. Unlike `to_lineq` this is extended to include the given variable
+    /// such that it holds logic as "if `given_id` is true then `self` must be true".
+    fn to_lineq_extended(&self, given_id: u32, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
+        return GeLineq::merge_disj(
+            &(variable_hm.get(&given_id).expect(&format!("variable id `{given_id}` does not exist in variable hash map"))).to_lineq_neg(),
+            &self.to_lineq(variable_hm)
+        ).expect("could not merge disjunctions") // <- should always be able to merge here
+    }
+
+    /// Transforms into a linear inequality constraint. If sub constraints fulfills certain requirements, then the sub constraints
+    /// will be merged into this constraint. If the requirements are not met, then `to_lineq_extended` is called. 
+    fn to_lineq_reduced(&self, extend_default: bool, given_id: u32, variable_hm: &HashMap<u32, Variable>, statement_hm: &HashMap<u32, &Statement>) -> GeLineq {
+        return match (self.bias, self.ids.len()) {
+            (-1, 2) => {
+                let sub_lineqs: Vec<GeLineq> = self.ids.iter().filter_map(|id| {
+                    if let Some(statement) = statement_hm.get(id) {
+                        if let Some(expression) = statement.expression.clone() {
+                            return Some(expression.to_lineq(variable_hm));
+                        }
+                    }
+                    return None;
+                }).collect();
+                if sub_lineqs.len() == 2 {
+                    if let Some(lineq) = GeLineq::merge_disj(&sub_lineqs[0], &sub_lineqs[1]) {
+                        return lineq;
+                    } else {
+                        return match extend_default {
+                            false => self.to_lineq(variable_hm),
+                            true => self.to_lineq_extended(given_id, variable_hm),
+                        }
+                    }
+                } else {
+                    return match extend_default {
+                        false => self.to_lineq(variable_hm),
+                        true => self.to_lineq_extended(given_id, variable_hm),
+                    }
+                }
+            },
+            (-2, 2) => {
+                let sub_lineqs: Vec<GeLineq> = self.ids.iter().filter_map(|id| {
+                    if let Some(statement) = statement_hm.get(id) {
+                        if let Some(expression) = statement.expression.clone() {
+                            return Some(expression.to_lineq(variable_hm));
+                        }
+                    }
+                    return None;
+                }).collect();
+                if sub_lineqs.len() == 2 {
+                    if let Some(lineq) = GeLineq::merge_conj(&sub_lineqs[0], &sub_lineqs[1]) {
+                        return lineq;
+                    } else {
+                        return match extend_default {
+                            false => self.to_lineq(variable_hm),
+                            true => self.to_lineq_extended(given_id, variable_hm),
+                        }
+                    }
+                } else {
+                    return match extend_default {
+                        false => self.to_lineq(variable_hm),
+                        true => self.to_lineq_extended(given_id, variable_hm),
+                    }
+                }
+            },
+            _ => match extend_default {
+                false => self.to_lineq(variable_hm),
+                true => self.to_lineq_extended(given_id, variable_hm),
+            }
         }
     }
 }
@@ -520,7 +591,7 @@ impl Display for AtLeast {
     }
 }
 
-/// A `Statement` is a declaration of a expression (or proposition) connected to a `Variable`.
+/// A `Statement` is a declaration of an expression (or proposition) connected to a `Variable`.
 /// For instance, "A is true iff x > 3, else false" is a statement. Currently only `AtLeast` is
 /// considered to be an `Expression`.
 pub struct Statement {
@@ -528,10 +599,31 @@ pub struct Statement {
     pub expression  : Option<AtLeast>
 }
 
+impl Clone for Statement {
+    fn clone(&self) -> Self {
+        return Statement {
+            variable: self.variable.clone(),
+            expression: match &self.expression {
+                Some(exp) => Some(exp.clone()),
+                None => None
+            }
+        }
+    }
+}
+
 /// A `Theory` is a list of statements with a common name (id).
 pub struct Theory {
     pub id : String,
     pub statements : Vec<Statement>
+}
+
+impl Clone for Theory {
+    fn clone(&self) -> Self {
+        return Theory {
+            id: self.id.clone(),
+            statements: self.statements.to_vec()
+        }
+    }
 }
 
 impl Theory {
@@ -560,7 +652,7 @@ impl Theory {
         return id_curr;
     }
 
-    // All bottom / atomic variable ids. E.i. statements that don't have any children.
+    // All bottom / atomic variable ids, e.i. statements that don't have any children.
     fn _bottoms(&self) -> Vec<&u32> {
         return self.statements.iter().filter_map(
             |statement| {
@@ -628,42 +720,47 @@ impl Theory {
     ///         },
     ///     ]
     /// };
-    /// let actual: Vec<GeLineq> = theory.to_lineqs();
+    /// let actual: Vec<GeLineq> = theory.to_lineqs(false, false);
     /// assert_eq!(actual.len(), 1);
     /// assert_eq!(actual[0].bias, 0);
     /// assert_eq!(actual[0].coeffs, vec![-1,1,1]);
     /// assert_eq!(actual[0].indices, vec![0,1,2]);
     /// ```
-    pub fn to_lineqs(&self) -> Vec<GeLineq> {
+    pub fn to_lineqs(&self, active: bool, reduced: bool) -> Vec<GeLineq> {
+        let top_node_id = *self._top();
         let var_hm: HashMap<u32, Variable> = self._variable_hm();
-        return self.statements.iter().filter_map(
-            |statement: &Statement| match &statement.expression {
-                Some(a) => GeLineq::merge_disj(
-                    &statement.variable.to_lineq_neg(),
-                    &a.to_lineq(
-                        a.ids.iter().map(
-                            |id| {
-                                var_hm.get(id).expect(
-                                    &format!(
-                                        "got id `{id}` in expression {a} that was not in theory"
-                                    )
-                                ).bounds
-                            }
-                        ).collect()
-                    )
-                ),
-                None => None
-            }
-        ).collect();
-    }
+        let state_hm: HashMap<u32, &Statement> = self._statement_hm();
+        let mut lineqs: Vec<GeLineq> = Vec::default();
+        let mut queue: Vec<u32> = vec![top_node_id];
 
-    // fn to_lineqs_red(&self) -> Vec<GeLineq> {
-    //     let state_hm: HashMap<u32, &Statement> = self.statement_hm();
-    //     let queue: Vec<u32> = vec![*self.top()];
-    //     while queue.len() > 0 {
-    //         current_statement : &Statement = queue
-    //     }
-    // }
+        while let Some(id) = queue.pop() {
+            if let Some(statement) = state_hm.get(&id) {
+                let pot_lineq = match &statement.expression {
+                    Some(a) => match reduced {
+                        true => Some(
+                            a.to_lineq_reduced(
+                                !((statement.variable.id == top_node_id) & active), 
+                                statement.variable.id,
+                                &var_hm,
+                                &state_hm,
+                            )
+                        ),
+                        false => match (statement.variable.id == top_node_id) & active {
+                            true => Some(a.to_lineq(&var_hm)),
+                            false => Some(a.to_lineq_extended(statement.variable.id, &var_hm))
+                        }
+                    },
+                    None => None
+                };
+
+                if let Some(act_lineq) = pot_lineq {
+                    queue.append(&mut act_lineq.indices.clone().into_iter().filter(|i| (*i) != statement.variable.id).collect());
+                    lineqs.push(act_lineq);
+                }
+            }
+        }
+        return lineqs;
+    }
 }
 
 #[cfg(test)]
@@ -672,8 +769,510 @@ mod tests {
 
     use super::*;
 
+    use std::ops::Range;
+    use itertools::Itertools;
+
+    impl GeLineq {
+        
+        fn satisfied(&self, variables: Vec<(u32, i64)>) -> bool{
+            let mut res = 0;
+            for i in 0..variables.len() {
+                for j in 0..self.coeffs.len() {
+                    if self.indices[j] == variables[i].0 {
+                        res = res + self.coeffs[j]*variables[i].1;
+                    }
+                }
+            }
+            return res + self.bias >= 0;
+        }
+    }
+
+    // Validates that all combinations, generated from `variable_bounds`, in two vectors of GeLineqs gives the same result, i.e. they hold the same truth table```
+    // The `all_relation` states how the GeLineq within each vector relates. If `all_relation` is true then all GeLineqs of the vector must hold to produce `True` as output. If `all_relation` is false then it is treated as an any, and only one GeLineq of the vector must hold to produce `True` as output. 
+    fn validate_all_combinations(variable_bounds: Vec<(u32, (i64, i64))>, lineqs0: Vec<GeLineq>, lineqs1: Vec<GeLineq>, all_relation: bool) -> bool {
+
+        let base : i64 = 2;
+        let max_combinations: i64 = base.pow(15);
+        let bound_ranges: Vec<std::ops::Range<i64>> = variable_bounds.iter().map(|x| Range {start: x.1.0, end: x.1.1+1}).collect_vec();
+        let n_combinations : i64 = variable_bounds.iter().map(|x| (x.1.1+1)-x.1.0).product();
+        if n_combinations > max_combinations {
+            panic!("number of combinations ({n_combinations}) to test are more than allowed ({max_combinations})");
+        }
+
+        return bound_ranges.into_iter().multi_cartesian_product().all(|combination| {
+            let variable_ids : Vec<u32> = variable_bounds.iter().map(|x| x.0).collect_vec();
+            let variable_combination: Vec<(u32, i64)> = variable_ids.into_iter().zip(combination).collect();
+
+            let res0: bool;
+            let res1: bool;
+            if all_relation {
+                res0 = lineqs0.iter().all(|x| x.satisfied(variable_combination.clone()));
+                res1 = lineqs1.iter().all(|x| x.satisfied(variable_combination.clone()));
+            } else {
+                res0 = lineqs0.iter().any(|x| x.satisfied(variable_combination.clone()));
+                res1 = lineqs1.iter().any(|x| x.satisfied(variable_combination.clone()));
+            }
+            return (res0 & res1) | !(res0 & res1);
+        })
+    }
+    
     #[test]
-    fn test_logic(){
+    fn test_theory_to_lineqs_reduced() {
+
+        fn validate(t: Theory) -> bool {
+            let non_reduced: Vec<GeLineq> = t.to_lineqs(true, false);
+            let reduced: Vec<GeLineq> = t.to_lineqs(true, true);
+            let variable_bounds: Vec<(u32, (i64, i64))> = t.statements.into_iter().map(|x| (x.variable.id, x.variable.bounds)).collect();
+            return validate_all_combinations(variable_bounds, non_reduced, reduced, true)
+        }
+
+        // Depth 3
+        // 0: 1 & 2
+        // 1: 3 + 4 >= 6 (3 has bounds (-5,5), 4 is bool) 
+        // 2: 5 + 6 >= 4 (5 has bounds (-3,3), 6 is bool) 
+
+        // Expected constraints:
+        // 4( x) +( y) -41
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: -6
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -4
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (-5,5) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (-3,3) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        assert!(validate(t));
+
+        // Depth 4
+        // 0: 1 & 2 & 3
+        // 1: 4 | 5
+        // 2: 5 | 6
+        // 3: 7 & 8
+        // 4: 9 & 10
+        // 5: -11
+        // 6: 12 | 13
+
+        // We test two things:
+        // 1) sharing variable works (both 1 and 2 has 5 as child and is reducable)
+        // 2) direct reducement works (0 and 3 has same constraint, therefore 0 should have 7 and 8 directly as children)  <- NOT IMPLEMENTED
+
+        // Expected constraints:
+        //   ( 1) +( 2) +( 3) -3
+        // -2( 3) +( 7) +( 8) +0
+        // -1(11) +(12) +(13) +0 (instead of 5 & 6)
+        //   ( 9) +(10)-2(11) +0 (instead of 4 & 5)
+
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2,3],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![4,5],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![7,8],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![9,10],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![11],
+                            bias: 0
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![12,13],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 8, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 9, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 10, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 11, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 12, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 13, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        assert!(validate(t));
+
+        // Depth 3
+        // 0: 1 -> 2
+        // 1: 3 & 4
+        // 2: 5 & 6 & 7
+        // Expects to be reduced into 1 constraint
+        // -3(3)-3(4)+(5)+(6)+(7)-3 >= 0 
+
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        assert!(validate(t));
+        
+        // Depth 3
+        // 0: 1 & 2
+        // 1: -3 | -4
+        // 2: 5 & 6 & 7
+        // Expects to be reduced into 1 constraint
+        // -4(3)-4(4)+(5)+(6)+(7) -3 >= 0
+
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: 0
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        assert!(validate(t));
+        
+        // Depth 4
+        // 0: 1 & 2
+        // 1: 3 & 4
+        // 2: 5 | 6
+        // 3: 7 | 8
+        // 4: 9 | 10
+        // 5: -11
+        // 6: 12 & 13
+
+        // Expects to be reduced into 5 constraints
+        // Notice since 0 constraint has 2 subs, it gets
+        // reduced before 1 and 2 could be reduced. Because
+        // of that, we don't get a minimum number of constraints.
+        //  3( 3) +3( 4) +( 5) +( 6) +( 7) -7
+        // -2( 6) +3(12) +(13) +0
+        // -1( 5) -1(11) +1
+        // -1( 4) +1( 9) +(10) +0
+        // -1( 3) +1( 7) +( 8) +0
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![7,8],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![9,10],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![11],
+                            bias: 0
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![12,13],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 8, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 9, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 10, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 11, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 12, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 13, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        assert!(validate(t));
+    }
+
+    #[test]
+    fn test_merge_conj_disj(){
+
+        fn validate_all_combinations_single(ge_lineq1: GeLineq, ge_lineq2: GeLineq, conj: bool) -> bool {
+            let mut variable_bounds_hm: HashMap<u32, (i64,i64)> = HashMap::default();
+            for lineq in vec![ge_lineq1.clone(), ge_lineq2.clone()] {
+                for (id, bound) in lineq.indices.iter().zip(lineq.bounds) {
+                    variable_bounds_hm.insert(*id, bound);
+                }
+            }
+            let variable_bounds = variable_bounds_hm.into_iter().collect();
+            if conj {
+                if let Some(merged) = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2) {
+                    return validate_all_combinations(
+                        variable_bounds, 
+                        vec![ge_lineq1, ge_lineq2], 
+                        vec![merged], 
+                        true
+                    );
+                }
+                return false;
+            } else {
+                if let Some(merged) = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2) {
+                    return validate_all_combinations(
+                        variable_bounds, 
+                        vec![ge_lineq1, ge_lineq2], 
+                        vec![merged], 
+                        false
+                    );
+                }
+                return false;
+            }
+        }
+
         // Disjunction merge between 1-1
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -687,11 +1286,9 @@ mod tests {
             bias    : -1,
             indices : vec![1, 6]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l) in iproduct!(0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(6,l)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(6,l)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(6,l)]));
-
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
+        
+        // }
         // Disjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -705,11 +1302,8 @@ mod tests {
             bias    : 0,
             indices : vec![1, 2, 3, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l) in iproduct!(0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(8,l)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(8,l)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(8,l)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-1
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -723,11 +1317,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-2
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -741,11 +1332,8 @@ mod tests {
             bias    : 3,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -759,11 +1347,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -777,11 +1362,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-5
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -795,11 +1377,8 @@ mod tests {
             bias    : -2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 1-6
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -813,11 +1392,8 @@ mod tests {
             bias    : 2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-2
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -831,11 +1407,8 @@ mod tests {
             bias    : 3,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -849,11 +1422,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -867,11 +1437,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-5
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -885,11 +1452,8 @@ mod tests {
             bias    : -2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Disjunction merge between 2-6
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -903,11 +1467,8 @@ mod tests {
             bias    : 2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k, l, m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7, n), (8, o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l),(6,m), (7, n), (8, o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
 
-        }
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -921,11 +1482,8 @@ mod tests {
             bias    : -3,
             indices : vec![1, 0, 4]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(4,l), (0,m)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(4,l), (0,m)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(4,l), (0,m)]));
-            
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -939,11 +1497,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-            
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 1-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -957,11 +1512,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-            
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -975,10 +1527,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 2-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -992,10 +1542,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 3-3
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1009,10 +1557,8 @@ mod tests {
             bias    : 0,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 3-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1026,10 +1572,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 3-5
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1043,11 +1587,8 @@ mod tests {
             bias    : -2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
 
-        }
         // Conjunction merge between 3-6
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![-1, -1, -1],
@@ -1061,10 +1602,8 @@ mod tests {
             bias    : 2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1078,10 +1617,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-5
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1095,10 +1632,8 @@ mod tests {
             bias    : -2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-6
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1112,10 +1647,8 @@ mod tests {
             bias    : 2,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1129,10 +1662,8 @@ mod tests {
             bias    : -4,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
+
         // Disjunction merge, special case
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1146,10 +1677,8 @@ mod tests {
             bias    : -1,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(-2..0, 2..4, 2..4, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) || ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, false));
+
         // Conjunction merge, special case
         let ge_lineq1:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1163,13 +1692,45 @@ mod tests {
             bias    : -1,
             indices : vec![5, 6, 7, 8]
         };
-        let result = GeLineq::merge_conj(&ge_lineq1, &ge_lineq2);
-        for (i,j,k,l,m, n, o) in iproduct!(-2..0, 2..4, 2..4, 0..2, 0..2, 0..2, 0..2){
-            assert_eq!((ge_lineq1.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]) && ge_lineq2.satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)])), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(3,k),(5,l), (6,m), (7,n), (8,o)]));
-        }
+        assert!(validate_all_combinations_single(ge_lineq1, ge_lineq2, true));
     }
+    
     #[test]
     fn test_substitution() {
+
+        fn validate_substitution(main_lineq: GeLineq, sub_lineq: GeLineq, variable_index: u32) -> bool {
+            if let Some(result) = GeLineq::substitution(&main_lineq, variable_index, &sub_lineq) {
+                let mut variable_bounds_hm: HashMap<u32, (i64,i64)> = HashMap::default();
+                for lineq in vec![main_lineq.clone(), sub_lineq.clone()] {
+                    for (id, bound) in lineq.indices.iter().zip(lineq.bounds) {
+                        if (*id) != variable_index {
+                            variable_bounds_hm.insert(*id, bound);
+                        }
+                    }
+                }
+                let variable_bounds: Vec<(u32, (i64, i64))> = variable_bounds_hm.into_iter().collect();
+                let variable_ids : Vec<u32> = variable_bounds.iter().map(|x| x.0).collect_vec();
+                let bound_ranges: Vec<std::ops::Range<i64>> = variable_bounds.iter().map(|x| Range {start: x.1.0, end: x.1.1+1}).collect_vec();
+                return bound_ranges.into_iter().multi_cartesian_product().all(|combination| {
+                    let mut main_variable_combination: Vec<(u32, i64)> = variable_ids.clone().into_iter().zip(combination.clone()).filter(|(id, _)| {
+                        main_lineq.indices.contains(id)
+                    }).collect();
+                    let sub_variable_combination: Vec<(u32, i64)> = variable_ids.clone().into_iter().zip(combination.clone()).filter(|(id, _)| {
+                        sub_lineq.indices.contains(id)
+                    }).collect();
+                    let sub_value: i64 = sub_lineq.satisfied(sub_variable_combination) as i64;
+                    main_variable_combination.push((variable_index, sub_value));
+
+                    let main_result = main_lineq.satisfied(main_variable_combination);
+                    let substitution_result = result.satisfied(variable_ids.clone().into_iter().zip(combination.clone()).collect());
+
+                    return (!main_result & !substitution_result) | (main_result & substitution_result);
+                });
+            }
+
+            return false;
+        }
+
         // Negative bias on sub lineq
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1183,11 +1744,7 @@ mod tests {
             bias    : -2,
             indices : vec![4,5]
         };
-        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
-        for (i,j,k,l) in iproduct!(0..2, 0..2, 0..2, 0..2){
-            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
-            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
-        }
+        assert!(validate_substitution(main_gelineq, sub_gelineq, 3));
 
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1201,11 +1758,8 @@ mod tests {
             bias    : -1,
             indices : vec![4,5]
         };
-        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
-        for (i,j,k,l) in iproduct!(0..2, 0..2, 0..2, 0..2){
-            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
-            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
-        }
+        assert!(validate_substitution(main_gelineq, sub_gelineq, 3));
+
         // Positive bias on sub lineq
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1219,11 +1773,8 @@ mod tests {
             bias    : 1,
             indices : vec![4,5]
         };
-        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
-        for (i,j,k,l) in iproduct!(0..2, 0..2, 0..2, 0..2){
-            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l)]) as i64;
-            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l)]));
-        }
+        assert!(validate_substitution(main_gelineq, sub_gelineq, 3));
+
         // Not possible to substitute
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1237,8 +1788,7 @@ mod tests {
             bias    : 0,
             indices : vec![4,5, 6]
         };
-        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
-        assert!(result.is_none());
+        assert!(!validate_substitution(main_gelineq, sub_gelineq, 3));
 
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![-1],
@@ -1252,15 +1802,12 @@ mod tests {
             bias    : -3,
             indices : vec![2]
         };
+        assert!(validate_substitution(main_gelineq.clone(), sub_gelineq.clone(), 1));
         let result = GeLineq::substitution(&main_gelineq, 1, &sub_gelineq);
         assert_eq!(vec![-1], result.as_ref().expect("").coeffs);
         assert_eq!(vec![(0, 10)], result.as_ref().expect("").bounds);
         assert_eq!(2, result.as_ref().expect("").bias);
-        for i in iproduct!(0..11){
-            let x:i64 = sub_gelineq.satisfied(vec![(2, i)]) as i64;
-            assert_eq!(main_gelineq.satisfied(vec![(2, i), (1, x)]), result.as_ref().expect("No result generated").satisfied(vec![(2, i), (1, x)]));
-        }
-        
+
         // Mixed signs of coeffs in sub lineq, possible to merge
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
@@ -1274,11 +1821,7 @@ mod tests {
             bias    : -1,
             indices : vec![4,5, 6]
         };
-        let result = GeLineq::substitution(&main_gelineq, 3, &sub_gelineq);
-        for (i,j,k,l, m) in iproduct!(0..2, 0..2, 0..2, 0..2, 0..2){
-            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (2, j),(4,k),(5,l), (6,m)]) as i64;
-            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, j), (3, z), (4,k),(5,l),(6,m)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (2, j),(4,k),(5,l),(6,m)]));
-        }
+        assert!(validate_substitution(main_gelineq, sub_gelineq, 3));
 
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1],
@@ -1292,11 +1835,8 @@ mod tests {
             bias    : -1,
             indices : vec![3, 4]
         };
-        let result = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq);
-        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
-            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (3, j), (4,k)]) as i64;
-            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, z), (3, j), (4,k)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (3, j),(4,k)]));
-        }
+        assert!(validate_substitution(main_gelineq, sub_gelineq, 2));
+
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
@@ -1309,11 +1849,8 @@ mod tests {
             bias    : -1,
             indices : vec![3, 4]
         };
-        let result = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq);
-        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
-            let z:i64 = sub_gelineq.satisfied(vec![(1, i), (3, j), (4,k)]) as i64;
-            assert_eq!(main_gelineq.satisfied(vec![(1, i), (2, z), (3, j), (4,k)]), result.as_ref().expect("No result generated").satisfied(vec![(1, i), (3, j),(4,k)]));
-        }
+        assert!(validate_substitution(main_gelineq, sub_gelineq, 2));
+
         let main_gelineq:GeLineq = GeLineq {
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
@@ -1333,105 +1870,100 @@ mod tests {
             indices : vec![6, 7]
         };
         let result1 = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq1);
+        assert!(validate_substitution(main_gelineq, sub_gelineq1, 2));
         let result2 = GeLineq::substitution(&result1.as_ref().expect("No gelineq created"), 3, &sub_gelineq2);
         assert!(result2.is_none());
     }
 
     #[test]
     fn test_min_max_coefficients() {
-        let gelineq : GeLineq = GeLineq { 
-            coeffs: vec![2, 1, 1],
-            bounds: vec![(0,1),(0,1),(0,1)],
-            bias: -1,
-            indices: vec![0, 1, 2]
-        };
-        let result = GeLineq::min_max_coefficients(&gelineq);
-        assert_eq!(vec![1, 1, 1], result.as_ref().expect("").coeffs);
-        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
-            assert_eq!(gelineq.satisfied(vec![(0, i), (1, j), (2, k)]), result.as_ref().expect("No result generated").satisfied(vec![(0, i), (1, j), (2, k)]));
+
+        fn validate_all_combinations_single_min_max(gelineq: GeLineq, expected_vec: Option<Vec<i64>>) -> bool {
+            let mut variable_bounds_hm: HashMap<u32, (i64,i64)> = HashMap::default();
+            for (id, bound) in gelineq.indices.iter().zip(gelineq.bounds.clone()) {
+                variable_bounds_hm.insert(*id, bound);
+            }
+            let variable_bounds = variable_bounds_hm.into_iter().collect();
+            if let Some(result) = GeLineq::min_max_coefficients(&gelineq) {
+                let validation = validate_all_combinations(
+                    variable_bounds, 
+                    vec![gelineq], 
+                    vec![result.clone()], 
+                    true
+                );
+                if let Some(vec) = expected_vec {
+                    return validation & (vec == result.coeffs)
+                } 
+                return validation;
+            }
+            return false;
         }
 
-        let gelineq : GeLineq = GeLineq { 
-            coeffs: vec![2, 1, 1],
-            bounds: vec![(-2,-1),(0,1),(0,1)],
-            bias: 0,
-            indices: vec![0, 1, 2]
-        };
-        let result = GeLineq::min_max_coefficients(&gelineq);
-        assert!(result.is_none());
-
-        let gelineq : GeLineq = GeLineq { 
-            coeffs: vec![5, 6, 3],
-            bounds: vec![(0,1),(0,1),(0,1)],
-            bias: -1,
-            indices: vec![0, 1, 2]
-        };
-        let result = GeLineq::min_max_coefficients(&gelineq);
-        assert_eq!(vec![1, 1, 1], result.as_ref().expect("").coeffs);
-        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
-            assert_eq!(gelineq.satisfied(vec![(0, i), (1, j), (2, k)]), result.as_ref().expect("No result generated").satisfied(vec![(0, i), (1, j), (2, k)]));
-        }
-
-        let gelineq : GeLineq = GeLineq { 
-            coeffs: vec![-2, -1, -1],
-            bounds: vec![(0,1),(0,1),(0,1)],
-            bias: 0,
-            indices: vec![0, 1, 2]
-        };
-        let result = GeLineq::min_max_coefficients(&gelineq);
-        assert_eq!(vec![-1, -1, -1], result.as_ref().expect("").coeffs);
-        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
-            assert_eq!(gelineq.satisfied(vec![(0, i), (1, j), (2, k)]), result.as_ref().expect("No result generated").satisfied(vec![(0, i), (1, j), (2, k)]));
-        }
-
-        let gelineq : GeLineq = GeLineq { 
-            coeffs: vec![-2, -1, -1],
-            bounds: vec![(0,1),(0,1),(0,1)],
-            bias: 1,
-            indices: vec![0, 1, 2]
-        };
-        let result = GeLineq::min_max_coefficients(&gelineq);
-        assert_eq!(vec![-2, -1, -1], result.as_ref().expect("").coeffs);
-        for (i,j,k) in iproduct!(0..2, 0..2, 0..2){
-            assert_eq!(gelineq.satisfied(vec![(0, i), (1, j), (2, k)]), result.as_ref().expect("No result generated").satisfied(vec![(0, i), (1, j), (2, k)]));
-        }
-
-        let gelineq : GeLineq = GeLineq { 
-            coeffs: vec![-2, 1, 1],
-            bounds: vec![(0,1),(0,1),(0,1)],
-            bias: 0,
-            indices: vec![0, 1, 2]
-        };
-        let result = GeLineq::min_max_coefficients(&gelineq);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_select_check_fn() {
-        assert_eq!(
-            select_check(vec![[0,1],[1,2],[3,4],[5,6]]),
-            vec![[5,6],[3,4],[1,2]]
+        assert!(
+            validate_all_combinations_single_min_max(
+                GeLineq { 
+                    coeffs: vec![2, 1, 1],
+                    bounds: vec![(0,1),(0,1),(0,1)],
+                    bias: -1,
+                    indices: vec![0, 1, 2]
+                }, 
+                Some(vec![1, 1, 1])
+            )
         );
-        
-        let empty : Vec<[u32;2]> = Vec::new();
-        assert_eq!(
-            select_check(vec![]),
-            empty
+        assert!(
+            !validate_all_combinations_single_min_max(
+                GeLineq { 
+                    coeffs: vec![2, 1, 1],
+                    bounds: vec![(-2,-1),(0,1),(0,1)],
+                    bias: 0,
+                    indices: vec![0, 1, 2]
+                }, 
+                None
+            )
         );
-
-        assert_eq!(
-            select_check(vec![[0,0],[1,1]]),
-            vec![[1,1],[0,0]]
+        assert!(
+            validate_all_combinations_single_min_max(
+                GeLineq { 
+                    coeffs: vec![5, 6, 3],
+                    bounds: vec![(0,1),(0,1),(0,1)],
+                    bias: -1,
+                    indices: vec![0, 1, 2]
+                }, 
+                Some(vec![1, 1, 1])
+            )
         );
-
-        assert_eq!(
-            select_check(vec![[1,2],[3,4],[2,5],[3,6]]),
-            vec![[3,6],[2,5]]
+        assert!(
+            validate_all_combinations_single_min_max(
+                GeLineq { 
+                    coeffs: vec![-2, -1, -1],
+                    bounds: vec![(0,1),(0,1),(0,1)],
+                    bias: 0,
+                    indices: vec![0, 1, 2]
+                }, 
+                Some(vec![-1, -1, -1]),
+            )
         );
-
-        assert_eq!(
-            select_check(vec![[3,1],[2,0],[0,1]]),
-            vec![[0,1]]
+        assert!(
+            validate_all_combinations_single_min_max(
+                GeLineq { 
+                    coeffs: vec![-2, -1, -1],
+                    bounds: vec![(0,1),(0,1),(0,1)],
+                    bias: 1,
+                    indices: vec![0, 1, 2]
+                }, 
+                Some(vec![-2,-1,-1]),
+            )
+        );
+        assert!(
+            !validate_all_combinations_single_min_max(
+                GeLineq { 
+                    coeffs: vec![-2, 1, 1],
+                    bounds: vec![(0,1),(0,1),(0,1)],
+                    bias: 0,
+                    indices: vec![0, 1, 2]
+                }, 
+                None
+            )
         );
     }
 
@@ -1638,6 +2170,23 @@ mod tests {
     
     #[test]
     fn test_theory_to_lineqs() {
+
+        fn validate_theory_lineqs(t: Theory, actual: Vec<GeLineq>, expected: Vec<GeLineq>) -> bool {
+            assert!(actual.iter().zip(expected.clone()).all(|(a,b)| {
+                let bias_eq = a.bias == b.bias;
+                let indices_eq = a.indices == b.indices;
+                let coeffs_eq = a.coeffs == b.coeffs;
+                let bounds_eq = a.bounds == b.bounds;
+                bias_eq & indices_eq & coeffs_eq & bounds_eq
+            }));
+            return validate_all_combinations(
+                t.statements.into_iter().map(|x| (x.variable.id, x.variable.bounds)).collect(), 
+                actual, 
+                expected, 
+                true
+            )
+        }
+
         let t = Theory {
             id: String::from("A"),
             statements: vec![
@@ -1690,7 +2239,7 @@ mod tests {
                 },
             ]
         };
-        let actual: Vec<GeLineq> = t.to_lineqs();
+        let actual: Vec<GeLineq> = t.to_lineqs(false, false);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
                 bias: 0,
@@ -1699,10 +2248,26 @@ mod tests {
                 indices: vec![0,1,2]
             },
             GeLineq {
+                bias: 0,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![-3,1,1,1],
+                indices: vec![2,5,6,7]
+            },
+            GeLineq {
                 bias: 2,
                 bounds: vec![(0,1),(0,1),(0,1)],
                 coeffs: vec![-1,-1,-1],
                 indices: vec![1,3,4]
+            },
+        ];
+        assert!(validate_theory_lineqs(t.clone(), actual, expected));
+        let actual: Vec<GeLineq> = t.to_lineqs(true, false);
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: -1,
+                bounds: vec![(0,1),(0,1)],
+                coeffs: vec![1,1],
+                indices: vec![1,2]
             },
             GeLineq {
                 bias: 0,
@@ -1710,8 +2275,33 @@ mod tests {
                 coeffs: vec![-3,1,1,1],
                 indices: vec![2,5,6,7]
             },
+            GeLineq {
+                bias: 2,
+                bounds: vec![(0,1),(0,1),(0,1)],
+                coeffs: vec![-1,-1,-1],
+                indices: vec![1,3,4]
+            },
         ];
-        let test_ok = actual.iter().zip(expected.iter()).all(|ae| ae.0.bias == ae.1.bias);
-        assert!(test_ok);
+        assert!(validate_theory_lineqs(t.clone(), actual, expected));
+        let actual: Vec<GeLineq> = t.to_lineqs(false, true); // reduce overrides active
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: 3,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![-3,-3,1,1,1],
+                indices: vec![3,4,5,6,7]
+            },
+        ];
+        assert!(validate_theory_lineqs(t.clone(), actual, expected));
+        let actual: Vec<GeLineq> = t.to_lineqs(true, true); // same as previous
+        let expected: Vec<GeLineq> = vec![
+            GeLineq {
+                bias: 3,
+                bounds: vec![(0,1),(0,1),(0,1),(0,1),(0,1)],
+                coeffs: vec![-3,-3,1,1,1],
+                indices: vec![3,4,5,6,7]
+            },
+        ];
+        assert!(validate_theory_lineqs(t.clone(), actual, expected));
     }
 }
