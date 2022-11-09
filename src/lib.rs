@@ -788,7 +788,7 @@ mod tests {
         }
     }
 
-    // Validates all combinations generated from `variable_bounds` in two vectors, lineqs0 och lineqs1, of GeLineq data types. 
+    // Validates that all combinations, generated from `variable_bounds`, in two vectors of GeLineqs gives the same result, i.e. they hold the same truth table```
     // `all_relation` how the results from lineqs0 and lineqs1 relates. If `all_relation` is true then either both 
     fn validate_all_combinations(variable_bounds: Vec<(u32, (i64, i64))>, lineqs0: Vec<GeLineq>, lineqs1: Vec<GeLineq>, all_relation: bool) -> bool {
 
