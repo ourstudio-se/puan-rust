@@ -516,7 +516,6 @@ impl AtLeast {
 
     /// Transforms into a linear inequality constraint. Unlike `to_lineq` this is extended to include the given variable
     /// such that it holds logic as "if `given_id` is true then `self` must be true".
-    /// ```
     fn to_lineq_extended(&self, given_id: u32, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
         return GeLineq::merge_disj(
             &(variable_hm.get(&given_id).expect(&format!("variable id `{given_id}` does not exist in variable hash map"))).to_lineq_neg(),
