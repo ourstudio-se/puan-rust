@@ -6,7 +6,7 @@ use std::hash::Hash;
 use std::{collections::HashMap};
 use std::fmt::Display;
 use std::cmp;
-
+use itertools::Itertools;
 pub mod solver;
 pub mod linalg;
 
@@ -399,7 +399,7 @@ impl GeLineq {
 
 /// Variable data structure has two properties, "id" and "bounds". An instance of Variable
 /// is used to reference to Statement or an input into a Theory. 
-#[derive(Copy, Hash, Eq)]
+#[derive(Copy, Hash, Eq, Debug)]
 pub struct Variable {
     pub id      : u32,
     pub bounds  : (i64, i64)
@@ -446,6 +446,19 @@ impl Variable {
             bounds: vec![(0,1)],
             indices: vec![self.id]
         }
+    }
+}
+
+
+#[derive(Debug)]
+pub struct PolyhedronExtended {
+    pub polyhedron  : solver::Polyhedron,
+    pub variable_ids   : Vec<u32>
+}
+
+impl PartialEq for PolyhedronExtended {
+    fn eq(&self, other: &Self) -> bool {
+        return (self.polyhedron == other.polyhedron) & (self.variable_ids == other.variable_ids);
     }
 }
 
@@ -761,11 +774,154 @@ impl Theory {
         }
         return lineqs;
     }
+
+    /// Converts Theory directly into a polyhedron. Set `active` param to true
+    /// if polyhedron initial state is false. Set `reduced` to true to retrieve a (maybe)
+    /// reduced polyhedron.
+    pub fn to_polyhedron(&self, active: bool, reduced: bool) -> PolyhedronExtended {
+        let lineqs = self.to_lineqs(active, reduced);
+        let mut index_bound_vec: Vec<(u32, (i64,i64))> = Vec::default();
+        for lineq in lineqs.iter() {
+            for (index, bound) in lineq.indices.iter().zip(lineq.bounds.iter()) {
+                let element = (*index, *bound);
+                if !index_bound_vec.contains(&element) {
+                    index_bound_vec.push(element);
+                }
+            }
+        }
+
+        let actual_indices: Vec<u32> = index_bound_vec.iter().map(|x| x.0).sorted().collect();
+        let new_indices: Vec<u32> = (0..actual_indices.len()).into_iter().map(|x| x as u32).collect();
+        let indices_map: HashMap<u32, u32> = actual_indices.into_iter().zip(new_indices).collect();
+
+        let n_rows = lineqs.len(); 
+        let n_cols = indices_map.len();
+
+        let mut val: Vec<f64> = vec![0.0; n_rows*n_cols];
+        for (i, lineq) in lineqs.iter().enumerate() {
+            for (j, cf) in lineq.indices.iter().map(|j| j).zip(lineq.coeffs.iter().map(|x| (*x) as f64)) {
+                let new_index: usize = indices_map[j] as usize;
+                val[i*n_cols + new_index] = cf;
+            }
+        }
+
+        return PolyhedronExtended {
+            polyhedron: solver::Polyhedron {
+                a: linalg::Matrix { 
+                    val: val, 
+                    ncols: n_cols, 
+                    nrows: n_rows,
+                },
+                b: lineqs.iter().map(|x| (-1*x.bias) as f64).collect(),
+                bounds: index_bound_vec.iter().map(|x| (x.1.0 as f64, x.1.1 as f64)).collect(),
+            },
+            variable_ids: indices_map.iter().map(|x| *x.0).sorted().collect()
+        };
+    }
+
+    /// Find solutions to this Theory directly. `objectives` is a vector of HashMap's pointing from
+    /// an id to a value. The solver will try and find a valid configuration that maximizes those values,
+    /// for each objective in objectives.
+    /// NOTES 
+    ///     - Ids given in objectives which are not in Theory will be ignored
+    ///     - Ids which have not been given a value will be given 0 as default.
+    /// 
+    /// /// # Example:
+    /// 
+    /// ```
+    /// use puanrs::Theory;
+    /// use puanrs::Statement;
+    /// use puanrs::AtLeast;
+    /// use puanrs::Variable;
+    /// let t = Theory {
+    ///    id: String::from("A"),
+    ///     statements: vec![
+    ///         Statement {
+    ///            variable: Variable { id: 0, bounds: (0,1) },
+    ///            expression: Some(
+    ///                AtLeast {
+    ///                    ids: vec![1,2],
+    ///                    bias: -1
+    ///                }
+    ///            )
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 1, bounds: (0,1) },
+    ///            expression: Some(
+    ///                AtLeast {
+    ///                    ids: vec![3,4],
+    ///                    bias: 1
+    ///                }
+    ///            )
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 2, bounds: (0,1) },
+    ///            expression: Some(
+    ///                AtLeast {
+    ///                    ids: vec![5,6,7],
+    ///                    bias: -3
+    ///                }
+    ///            )
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 3, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 4, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 5, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 6, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 7, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///     ]
+    /// };
+    /// let actual_solutions = t.solve(
+    ///     vec![
+    ///         vec![(3, 1.0), (4, 1.0)].iter().cloned().collect(),
+    ///     ]
+    /// );
+    /// let expected_solutions = vec![
+    ///    vec![1,1,1,1,1],
+    /// ];
+    /// assert_eq!(actual_solutions[0].x, expected_solutions[0]);
+    pub fn solve(&self, objectives: Vec<HashMap<u32, f64>>) -> Vec<solver::IntegerSolution> {
+        let ph_ext: PolyhedronExtended = self.to_polyhedron(true,true);
+        let _objectives: Vec<Vec<f64>> = objectives.iter().map(|x| {
+            let mut vector = vec![0.0; ph_ext.variable_ids.len()];
+            for (k, v) in x.iter() {
+                let pot_index = ph_ext.variable_ids.iter().position(|y| y == k);
+                if let Some(index) = pot_index {
+                    vector[index] = *v;
+                }
+            }
+            return vector;
+        }).collect();
+        return _objectives.iter().map(|objective| {
+            let ilp = solver::IntegerLinearProgram {
+                ge_ph: ph_ext.polyhedron.to_owned(),
+                eq_ph: Default::default(),
+                of: objective.to_vec(),
+            };
+            return ilp.solve();
+        }).collect();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::vec;
+
+    use crate::{solver::Polyhedron, linalg::Matrix};
 
     use super::*;
 
@@ -2325,5 +2481,385 @@ mod tests {
         assert_eq!(actual_solution.x, expected_solution_x);
         assert_eq!(actual_solution.z, 4);
     }
-}
 
+    #[test]
+    fn test_theory_to_polyhedron() {
+
+        fn validate(actual: PolyhedronExtended, expected: PolyhedronExtended) -> bool {
+            if actual.variable_ids != expected.variable_ids {
+                return false;
+            }
+
+            let variable_bounds = actual.polyhedron.bounds.clone();
+            let base : i64 = 2;
+            let max_combinations: i64 = base.pow(15);
+            let bound_ranges: Vec<std::ops::Range<i64>> = variable_bounds.iter().map(|x| Range {start: (x.0 as i64), end: (x.1 as i64)+1}).collect_vec();
+            let n_combinations : i64 = variable_bounds.iter().map(|x| ((x.1 as i64)+1)-(x.0 as i64)).product();
+            if n_combinations > max_combinations {
+                panic!("number of combinations ({n_combinations}) to test are more than allowed ({max_combinations})");
+            }
+
+            let combinations: Vec<Vec<i64>> = bound_ranges.clone().into_iter().multi_cartesian_product().collect();
+            let combination_matrix: Matrix = Matrix {
+                val: combinations.clone().into_iter().concat().iter().map(|x| (*x) as f64).collect(),
+                ncols: bound_ranges.len(),
+                nrows: combinations.len(),
+            };
+
+            let actual_dot: Matrix = actual.polyhedron.a.dot(&combination_matrix.transpose());
+            let actual_dot_cmp: Vec<bool> = actual_dot.val.chunks(actual_dot.nrows).map(|x| {
+                x.iter().zip(actual.polyhedron.b.clone()).map(|(v0,v1)| (*v0) >= v1).collect()
+            }).concat();
+            let expected_dot: Matrix = expected.polyhedron.a.dot(&combination_matrix.transpose());
+            let expected_dot_cmp: Vec<bool> = expected_dot.val.chunks(expected_dot.nrows).map(|x| {
+                x.iter().zip(expected.polyhedron.b.clone()).map(|(v0,v1)| (*v0) >= v1).collect()
+            }).concat();
+
+            return actual_dot_cmp == expected_dot_cmp;
+        }
+
+        // Depth 3
+        // 0: 1 & 2
+        // 1: 3 + 4 >= 6 (3 has bounds (-5,5), 4 is bool) 
+        // 2: 5 + 6 >= 4 (5 has bounds (-3,3), 6 is bool) 
+
+        // Since each variable must be set to their max we can
+        // reduce into one single constraint (3)+(4)+(5)+(6) >= 10
+
+        // Expected constraints:
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: -6
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -4
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (-5,5) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (-3,3) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        
+        let expected: PolyhedronExtended = PolyhedronExtended { 
+            polyhedron: Polyhedron {
+                a: linalg::Matrix { 
+                    val: vec![1.0, 1.0, 1.0, 1.0], 
+                    ncols: 4, 
+                    nrows: 1 
+                },
+                b: vec![10.0],
+                bounds: vec![(-5.0, 5.0),(0.0, 1.0),(-3.0, 3.0),(0.0, 1.0)]
+            }, 
+            variable_ids: vec![3, 4, 5, 6] 
+        };
+        assert!(validate(t.to_polyhedron(true, true), expected));
+
+        // Depth 4
+        // 0: 1 & 2 & 3
+        // 1: 4 | 5
+        // 2: 5 | 6
+        // 3: 7 & 8
+        // 4: 9 & 10
+        // 5: -11
+        // 6: 12 | 13
+
+        // We test two things:
+        // 1) sharing variable works (both 1 and 2 has 5 as child and is reducable)
+        // 2) direct reducement works (0 and 3 has same constraint, therefore 0 should have 7 and 8 directly as children)  <- NOT IMPLEMENTED
+
+        // Expected constraints:
+        //   ( 1) +( 2) +( 3) -3
+        // -2( 3) +( 7) +( 8) +0
+        // -1(11) +(12) +(13) +0 (instead of 5 & 6)
+        //   ( 9) +(10)-2(11) +0 (instead of 4 & 5)
+
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2,3],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![4,5],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![7,8],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![9,10],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![11],
+                            bias: 0
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![12,13],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 8, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 9, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 10, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 11, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 12, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 13, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+
+        let expected: PolyhedronExtended = PolyhedronExtended { 
+            polyhedron: Polyhedron {
+                a: linalg::Matrix { 
+                    val: vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -2.0, 0.0, 0.0], 
+                    ncols: 10, 
+                    nrows: 4
+                },
+                b: vec![3.0, 0.0, 0.0, 0.0],
+                bounds: vec![(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0)]
+            }, 
+            variable_ids: vec![1, 2, 3, 7, 8, 9, 10, 11, 12, 13] 
+        };
+        assert!(validate(t.to_polyhedron(true, true), expected));
+
+        // Depth 3
+        // 0: 1 -> 2
+        // 1: 3 & 4
+        // 2: 5 & 6 & 7
+        // Expects to be reduced into 1 constraint
+        // -3(3)-3(4)+(5)+(6)+(7)-3 >= 0 
+
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+
+        let expected: PolyhedronExtended = PolyhedronExtended { 
+            polyhedron: Polyhedron {
+                a: linalg::Matrix { 
+                    val: vec![-3.0, -3.0, 1.0, 1.0, 1.0], 
+                    ncols: 5, 
+                    nrows: 1
+                },
+                b: vec![-3.0],
+                bounds: vec![(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0)]
+            }, 
+            variable_ids: vec![3, 4, 5, 6, 7] 
+        };
+        assert!(validate(t.to_polyhedron(true, true), expected));
+    }
+
+    #[test]
+    fn test_theory_solve() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let actual_solutions = t.solve(
+            vec![
+                vec![(3, 1.0), (4, 1.0)].iter().cloned().collect(),
+                vec![(3, 2.0), (4, 1.0), (5, -1.0), (6, -1.0), (7, -1.0)].iter().cloned().collect(),
+                // vec![3.0, 1.0,-1.0,-1.0, 1.0],
+            ]);
+        let expected_solutions = vec![
+            vec![1,1,1,1,1],
+            vec![1,0,0,0,0],
+            // vec![1,0,0,0,1],
+        ];
+        assert!(actual_solutions.iter().zip(expected_solutions).all(|(x,y)| x.x == y));
+    }
+}

@@ -25,6 +25,12 @@ impl Clone for Matrix {
     }
 }
 
+impl PartialEq for Matrix {
+    fn eq(&self, other: &Self) -> bool {
+        return (self.val == other.val) & (self.ncols == other.ncols) & (self.nrows == other.nrows);
+    }
+}
+
 /// Creates an identity matrix based on the input size `n`
 pub fn identity_matrix(n: usize) -> Matrix {
     let mut t: Vec<f64> = Vec::with_capacity(n*n);

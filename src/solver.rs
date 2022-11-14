@@ -11,7 +11,7 @@ use crate::linalg;
 /// Data structure for polyhedron with `a` as `Matrix` and `b` as `Vec` and `bounds` as a `Vec` of `Tuples`.
 /// Note that the number of rows of `a` must be the same as the length of `b` and the number of columns of `a`
 /// must be the same as the length of `bounds`.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Polyhedron {
     /// The left-hand side of linear constraints on the form $ a + b + c \ge x $.
     pub a: Matrix,
@@ -23,6 +23,11 @@ pub struct Polyhedron {
 impl Clone for Polyhedron {
     fn clone(&self) -> Self {
         Polyhedron { a: self.a.clone(), b: self.b.clone(), bounds: self.bounds.clone() }
+    }
+}
+impl PartialEq for Polyhedron {
+    fn eq(&self, other: &Self) -> bool {
+        return (self.a == other.a) & (self.b == other.b) & (self.bounds == other.bounds);
     }
 }
 
