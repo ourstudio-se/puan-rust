@@ -325,7 +325,7 @@ impl Theory {
         return lineqs;
     }
 
-    /// Converts Theory directly into a polyhedron. Set `active` param to true
+    /// Converts Theory into a polyhedron. Set `active` param to true
     /// to activate polyhedron, meaning assuming the top node to be true. 
     /// Set `reduced` to true to retrieve a (maybe) reduced polyhedron.
     pub fn to_polyhedron(&self, active: bool, reduced: bool) -> Polyhedron {
