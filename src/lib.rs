@@ -2,452 +2,15 @@
 //! 
 //! Puan algorithms implemented in Rust. 
 
-use std::hash::Hash;
 use std::{collections::HashMap};
 use std::fmt::Display;
-use std::cmp;
+use itertools::Itertools;
+use polyopt::{GeLineq, Variable, Polyhedron};
 
 pub mod solver;
 pub mod linalg;
+pub mod polyopt;
 
-/// Data structure for linear inequalities on the following form
-/// $$ c_0 * v_0 + c_1 * v_1 + ... + c_n * v_n + bias \ge 0 $$ for $ c \in $ `coeffs` and $ v $ are variables which can take on the values
-/// given by `bounds`. `Indices` represents the global indices of the variables. Note that the length of `coeffs`, `bounds` and `indices` must be the same.
-#[derive(Hash)]
-pub struct GeLineq {
-    pub coeffs  : Vec<i64>,
-    pub bounds  : Vec<(i64, i64)>,
-    pub bias    : i64,
-    pub indices : Vec<u32>
-}
-
-impl Clone for GeLineq {
-    fn clone(&self) -> Self {
-        return GeLineq {
-            coeffs: self.coeffs.to_vec(),
-            bounds: self.bounds.to_vec(),
-            bias: self.bias,
-            indices: self.indices.to_vec(),
-        }
-    }
-}
-
-impl GeLineq {
-    
-    fn _eqmax(&self) -> i64 {
-        let mut res : i64 = 0;
-        for i in 0..self.coeffs.len() {
-            if self.coeffs[i] < 0 {
-                res = res + self.coeffs[i] * self.bounds[i].0;
-            } else {
-                res = res + self.coeffs[i] * self.bounds[i].1;
-            }
-        }
-        return res;
-    }
-    
-    fn _eqmin(&self) -> i64 {
-        let mut res : i64 = 0;
-        for i in 0..self.coeffs.len() {
-            if self.coeffs[i] > 0 {
-                res = res + self.coeffs[i] * self.bounds[i].0;
-            } else {
-                res = res + self.coeffs[i] * self.bounds[i].1;
-            }
-        }
-        return res;
-    }
-    
-    /// Takes two GeLineqs and merge those into one GeLineq under the condition that one of the GeLineqs must be satisfied.
-    /// If it's not possible to merge the inequalities, i.e. it's impossible to preserve the logic, `none` is returned.
-    /// 
-    /// # Example:
-    /// 
-    /// If atleast one of the two linear inequalities $ x + y - 1 \ge 0 $ where $ x, y \in \\{0, 1 \\}$ and $ a + b - 1 \ge 0 $ where $ a, b \in \\{0, 1\\}$ must hold,
-    /// then they can be merged into one linear inequality as $ x + y + a + b - 1 \ge 0$ where $ x, y, a, b \in \\{0, 1\\}$. Note that the logic is preserved,
-    /// i.e the merged inequality will be valid if at least one of the two original inequalities are valid. Likewise, the merged constraint will not be valid if none of the original inequalites are.
-    /// ```
-    /// use puanrs::GeLineq;
-    /// let ge_lineq1:GeLineq = GeLineq {
-    ///    coeffs  : vec![1, 1],
-    ///    bounds  : vec![(0, 1), (0, 1)],
-    ///    bias    : -1,
-    ///    indices : vec![1, 2]
-    ///    };
-    /// let ge_lineq2: GeLineq = GeLineq {
-    ///    coeffs  : vec![1, 1],
-    ///    bounds  : vec![(0, 1), (0, 1)],
-    ///    bias    : -1,
-    ///    indices : vec![3, 4]
-    ///  };
-    /// let expected: GeLineq = GeLineq {
-    ///    coeffs  : vec![1, 1, 1, 1],
-    ///    bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
-    ///    bias    : -1,
-    ///    indices : vec![1, 2, 3, 4]
-    ///  };
-    /// let actual = GeLineq::merge_disj(&ge_lineq1, &ge_lineq2);
-    /// assert_eq!(actual.as_ref().expect("Not possible to merge lineqs").coeffs, expected.coeffs);
-    /// assert_eq!(actual.as_ref().expect("Not possible to merge lineqs").bounds, expected.bounds);
-    /// assert_eq!(actual.as_ref().expect("Not possible to merge lineqs").bias, expected.bias);
-    /// assert_eq!(actual.as_ref().expect("Not possible to merge lineqs").indices, expected.indices);
-    /// ```
-    pub fn merge_disj(ge_lineq1: &GeLineq, ge_lineq2: &GeLineq) -> Option<GeLineq> {
-        if ge_lineq1._eqmin() + ge_lineq1.bias == -1 {
-            let mut equal_indices : Vec<(usize, usize)> = Vec::new();
-            for i in 0..ge_lineq1.indices.len(){
-                for j in 0..ge_lineq2.indices.len(){
-                    if ge_lineq1.indices[i]==ge_lineq2.indices[j] {
-                        equal_indices.push((i, j));
-                    }
-                }
-            }
-            let n: usize = ge_lineq1.coeffs.len() + ge_lineq2.coeffs.len() - equal_indices.len();
-            let mut new_coeffs : Vec<i64> = Vec::with_capacity(n);
-            let mut equal_index_pointer: usize = 0;
-            let mut corrector: i64 = 0;
-            let mut new_bounds : Vec<(i64, i64)> = Vec::with_capacity(n);
-            let mut new_indices : Vec<u32> = Vec::with_capacity(n);
-            
-            for i in 0..ge_lineq1.coeffs.len() {
-                if equal_index_pointer < equal_indices.len() && equal_indices[equal_index_pointer].0 == i {
-                    corrector = ge_lineq2.coeffs[equal_indices[equal_index_pointer].1];
-                    equal_index_pointer = equal_index_pointer + 1;
-                }
-                new_coeffs.push(-ge_lineq1.coeffs[i]*(ge_lineq2._eqmin() + ge_lineq2.bias) + corrector);
-                new_indices.push(ge_lineq1.indices[i]);
-                new_bounds.push(ge_lineq1.bounds[i]);
-                corrector = 0;
-            }
-            let mut skip_equal_index = false;
-            for i in 0..ge_lineq2.coeffs.len(){
-                for j in 0..equal_indices.len(){
-                    if equal_indices[j].1 == i {
-                        equal_indices.remove(j);
-                        skip_equal_index = true;
-                        break;
-                    }
-                }
-                if !skip_equal_index {
-                    new_coeffs.push(ge_lineq2.coeffs[i]);
-                    new_indices.push(ge_lineq2.indices[i]);
-                    new_bounds.push(ge_lineq2.bounds[i]);
-                }
-                skip_equal_index = false;
-            }
-            return Some(
-                GeLineq {
-                    coeffs: new_coeffs,
-                    bounds: new_bounds,
-                    bias: ge_lineq1._eqmin()*(ge_lineq2._eqmin() + ge_lineq2.bias)+ge_lineq2.bias,
-                    indices: new_indices
-                }
-            );  
-        } else if ge_lineq2._eqmin() + ge_lineq2.bias == -1 {
-            return GeLineq::merge_disj(ge_lineq2, ge_lineq1);
-        }
-    
-        None
-        
-    }
-
-    /// Takes two GeLineqs and merge those into one GeLineq under the condition that both of the GeLineqs must be valid.
-    /// If it's not possible to merge the inequalities, i.e. it's impossible to preserve the logic, `none` is returned.
-    pub fn merge_conj(ge_lineq1: &GeLineq, ge_lineq2: &GeLineq) -> Option<GeLineq> {
-    
-        if ge_lineq1._eqmax() + ge_lineq1.bias == 0 {
-            let mut equal_indices : Vec<(usize, usize)> = Vec::new();
-            for i in 0..ge_lineq1.indices.len(){
-                for j in 0..ge_lineq2.indices.len(){
-                    if ge_lineq1.indices[i]==ge_lineq2.indices[j] {
-                        equal_indices.push((i, j));
-                    }
-                }
-            }
-            let n: usize = ge_lineq1.coeffs.len() + ge_lineq2.coeffs.len() - equal_indices.len();
-            let mut new_coeffs : Vec<i64> = Vec::with_capacity(n);
-            let mut equal_index_pointer: usize = 0;
-            let mut corrector: i64 = 0;
-            let mut new_bounds : Vec<(i64, i64)> = Vec::with_capacity(n);
-            let mut new_indices : Vec<u32> = Vec::with_capacity(n);
-            
-            for i in 0..ge_lineq1.coeffs.len() {
-                if equal_index_pointer < equal_indices.len() && equal_indices[equal_index_pointer].0 == i {
-                    corrector = ge_lineq2.coeffs[equal_indices[equal_index_pointer].1];
-                    equal_index_pointer = equal_index_pointer + 1;
-                }
-                new_coeffs.push(ge_lineq1.coeffs[i]*(cmp::max(ge_lineq2._eqmax().abs(), ge_lineq2._eqmin().abs())+1) + corrector);
-                new_indices.push(ge_lineq1.indices[i]);
-                new_bounds.push(ge_lineq1.bounds[i]);
-                corrector = 0;
-            }
-            let mut skip_equal_index = false;
-            for i in 0..ge_lineq2.coeffs.len(){
-                for j in 0..equal_indices.len(){
-                    if equal_indices[j].1 == i {
-                        equal_indices.remove(j);
-                        skip_equal_index = true;
-                        break;
-                    }
-                }
-                if !skip_equal_index {
-                    new_coeffs.push(ge_lineq2.coeffs[i]);
-                    new_indices.push(ge_lineq2.indices[i]);
-                    new_bounds.push(ge_lineq2.bounds[i]);
-                }
-                skip_equal_index = false;
-            }
-            return Some(
-                GeLineq {
-                    coeffs: new_coeffs,
-                    bounds: new_bounds,
-                    bias: ge_lineq1.bias*(cmp::max(ge_lineq2._eqmax().abs(), ge_lineq2._eqmin().abs())+1) + ge_lineq2.bias - cmp::max(ge_lineq2._eqmin() + ge_lineq2.bias, 0),
-                    indices: new_indices
-                }
-            );  
-        } else if ge_lineq2._eqmax() + ge_lineq2.bias == 0 {
-            return GeLineq::merge_conj(&ge_lineq2, &ge_lineq1);
-        }
-    
-        None
-        
-    }
-    
-    /// Takes a GeLineq, referred to as main GeLineq which has a variable (given by variable index) which in turn is a GeLineq, referred to as the sub GeLineq.
-    /// The function substitutes the variable with the sub GeLineq into the main GeLineq if possible. 
-    /// 
-    /// # Example
-    /// Given the lineq x + Y - 2 >= 0 where Y: a + b - 1 >= 0
-    /// a substitution would give 2x + a + b - 3 >= 0. Lets see it in code:
-    /// ```
-    /// use puanrs::GeLineq;
-    /// let main_gelineq:GeLineq = GeLineq {
-    ///    coeffs  : vec![1, 1],
-    ///    bounds  : vec![(0, 1), (0, 1)],
-    ///    bias    : -2,
-    ///    indices : vec![1, 2]
-    /// };
-    /// let sub_gelineq: GeLineq = GeLineq {
-    ///    coeffs  : vec![1, 1],
-    ///    bounds  : vec![(0, 1), (0, 1)],
-    ///    bias    : -1,
-    ///    indices : vec![3, 4]
-    /// };
-    /// let result = GeLineq::substitution(&main_gelineq, 2, &sub_gelineq);
-    /// assert_eq!(vec![2, 1, 1], result.as_ref().expect("No result generated").coeffs);
-    /// assert_eq!(vec![(0,1), (0,1), (0,1)], result.as_ref().expect("No result generated").bounds);
-    /// assert_eq!(-3, result.as_ref().expect("No result generated").bias);
-    /// assert_eq!(vec![1, 3, 4], result.as_ref().expect("No result generated").indices);
-    /// ```
-
-    pub fn substitution(main_gelineq: &GeLineq, variable_index: u32, sub_gelineq: &GeLineq) -> Option<GeLineq> {
-        let var_to_substitute = main_gelineq.indices.iter().position(|&x| x == variable_index).expect(&format!("Variable '{variable_index}' to substitute not found"));
-        if main_gelineq.coeffs[var_to_substitute] < 0 {
-            let new_sub_coeffs: Vec<i64> = sub_gelineq.coeffs.iter().map(|x| -1*x).collect();
-            let new_sub_bias = -sub_gelineq.bias - 1;
-            let new_sub_gelineq = GeLineq {
-                coeffs: new_sub_coeffs,
-                bounds: sub_gelineq.bounds.to_vec(),
-                bias: new_sub_bias,
-                indices: sub_gelineq.indices.to_vec()
-            };
-                return GeLineq::_substitution(main_gelineq, var_to_substitute, &new_sub_gelineq);
-        }
-        return GeLineq::_substitution(main_gelineq, var_to_substitute, sub_gelineq);
-    }
-    
-    fn _substitution(main_gelineq: &GeLineq, variable_index: usize, sub_gelineq: &GeLineq) -> Option<GeLineq> {
-        if !GeLineq::is_homogenous(main_gelineq) && sub_gelineq.coeffs.len() > 1 {
-            // Not possible to perform substitution
-            return None;
-        }
-        if sub_gelineq.bias < 0 {
-            if sub_gelineq._eqmax() > 0 && (main_gelineq.coeffs[variable_index]*(2*sub_gelineq._eqmax() + sub_gelineq.bias)/sub_gelineq._eqmax()) >= 2 {
-                // Not possible to perform substitution
-                return None;
-            }
-        } else {
-            if (main_gelineq.coeffs[variable_index]*(sub_gelineq._eqmax() + sub_gelineq._eqmin().abs() + sub_gelineq.bias) / sub_gelineq._eqmin().abs()) >= 2 {
-                // Not possible to perform substitution
-                return None;
-            }
-        }
-        let mut equal_indices : Vec<(usize, usize)> = Vec::new();
-        for i in 0..main_gelineq.indices.len(){
-            for j in 0..sub_gelineq.indices.len(){
-                if main_gelineq.indices[i]==sub_gelineq.indices[j] {
-                    equal_indices.push((i, j));
-                }
-            }
-        }
-        let n: usize = main_gelineq.coeffs.len() + sub_gelineq.coeffs.len() - equal_indices.len() - 1;
-        let mut new_coeffs : Vec<i64> = Vec::with_capacity(n);
-        let mut equal_index_pointer: usize = 0;
-        let mut corrector: i64 = 0;
-        let mut new_bounds : Vec<(i64, i64)> = Vec::with_capacity(n);
-        let mut new_indices : Vec<u32> = Vec::with_capacity(n);
-        
-        for i in 0..main_gelineq.coeffs.len() {
-            if i == variable_index {
-                continue;
-            }
-            if equal_index_pointer < equal_indices.len() && equal_indices[equal_index_pointer].0 == i {
-                corrector = sub_gelineq.coeffs[equal_indices[equal_index_pointer].1];
-                equal_index_pointer = equal_index_pointer + 1;
-            }
-            if sub_gelineq.bias < 0 {
-                new_coeffs.push(main_gelineq.coeffs[i]*sub_gelineq._eqmax() + corrector);
-            } else {
-                new_coeffs.push(main_gelineq.coeffs[i]*sub_gelineq._eqmin().abs() + corrector);
-            }
-            new_indices.push(main_gelineq.indices[i]);
-            new_bounds.push(main_gelineq.bounds[i]);
-            corrector = 0;
-        }
-        let mut skip_equal_index = 0;
-        for i in 0..sub_gelineq.coeffs.len(){
-            for j in 0..equal_indices.len(){
-                if equal_indices[j].1 == i {
-                    equal_indices.remove(j);
-                    skip_equal_index = 1;
-                    break;
-                }
-            }
-            if skip_equal_index < 1 {
-                new_coeffs.push(sub_gelineq.coeffs[i]);
-                new_indices.push(sub_gelineq.indices[i]);
-                new_bounds.push(sub_gelineq.bounds[i]);
-            }
-            skip_equal_index = 0;
-        }
-        let adjuster = if main_gelineq.bias != 0 {1} else {0};
-        let new_bias = if sub_gelineq.bias < 0 {(main_gelineq.bias + adjuster)*sub_gelineq._eqmax() + sub_gelineq.bias} else {(main_gelineq.bias+adjuster)*sub_gelineq._eqmin().abs() + sub_gelineq.bias};
-        return Some(
-            GeLineq {
-                coeffs: new_coeffs,
-                bounds: new_bounds,
-                bias: new_bias,
-                indices: new_indices
-            }
-        );  
-    }
-
-    fn is_homogenous(ge_lineq: &GeLineq) -> bool {
-        let first = ge_lineq.coeffs[0];
-        ge_lineq.coeffs.iter().all(|x| *x==first)
-    }
-    
-    fn is_mixed(gelineq: &GeLineq) -> bool {
-        let mut is_mixed = false;
-        let mut positive = false;
-        let mut negative = false;
-        let mut i: usize = 0;
-        while !is_mixed && i < gelineq.coeffs.len() {
-            if gelineq.coeffs[i]*gelineq.bounds[i].0 > 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 > 0 {
-                positive = true;
-            }
-            if gelineq.coeffs[i]*gelineq.bounds[i].0 < 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 < 0 {
-                negative = true
-            }
-            if positive && negative {
-                is_mixed = true;
-            }
-            i = i + 1;
-        }
-        return is_mixed;
-    }
-    
-    /// Takes a GeLineq and minimizes/maximizes the coefficients while preserving the logic
-    /// 
-    /// # Example
-    /// 
-    /// Consider the GeLineq 2x + y + z >= 1 where x, y, z takes values between 0 and 1.
-    /// This inequlity can be written as x + y + z >= 1 while preserving the logic. 
-    /// ```
-    /// use puanrs::GeLineq;
-    /// let gelineq: GeLineq = GeLineq {
-    ///     coeffs  : vec![2, 1, 1],
-    ///     bounds  : vec![(0,1), (0,1), (0,1)],
-    ///     bias    : -1,
-    ///     indices : vec![0, 1, 2]
-    ///   };
-    /// let result = GeLineq::min_max_coefficients(&gelineq);
-    /// assert_eq!(vec![1, 1, 1], result.as_ref().expect("").coeffs);
-    pub fn min_max_coefficients(gelineq: &GeLineq) -> Option<GeLineq> {
-        if GeLineq::is_mixed(gelineq){
-            return None;
-        }
-        let mut new_coeffs: Vec<i64> = Vec::with_capacity(gelineq.coeffs.len());
-        for i in 0..gelineq.coeffs.len(){
-            if gelineq.coeffs[i]*gelineq.bounds[i].0 > 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 > 0 {
-                new_coeffs.push(cmp::min(gelineq.coeffs[i], cmp::max(-gelineq.bias, 0)));
-            } else if gelineq.coeffs[i]*gelineq.bounds[i].0 < 0 || gelineq.coeffs[i]*gelineq.bounds[i].1 < 0 {
-                new_coeffs.push(cmp::max(gelineq.coeffs[i], cmp::min(-gelineq.bias, 0)-1));
-            } else {
-                new_coeffs.push(0);
-            }
-        }
-        return Some(GeLineq {
-            coeffs: new_coeffs,
-            bounds: gelineq.bounds.to_vec(),
-            bias: gelineq.bias, 
-            indices: gelineq.indices.to_vec() })
-        }
-        
-        
-    }
-
-/// Variable data structure has two properties, "id" and "bounds". An instance of Variable
-/// is used to reference to Statement or an input into a Theory. 
-#[derive(Copy, Hash, Eq)]
-pub struct Variable {
-    pub id      : u32,
-    pub bounds  : (i64, i64)
-}
-
-impl Clone for Variable {
-    fn clone(&self) -> Self {
-        return Variable {
-            id : self.id,
-            bounds: self.bounds
-        }
-    }
-}
-
-impl PartialEq for Variable {
-    fn eq(&self, other: &Self) -> bool {
-        return self.id == other.id;
-    }
-}
-
-impl Variable {
-
-    /// A negated linear inequality representation of a Variable.
-    /// 
-    /// # Example:
-    /// 
-    /// ```
-    /// use puanrs::Variable;
-    /// use puanrs::GeLineq;
-    /// let variable: Variable = Variable {
-    ///     id      : 0,
-    ///     bounds  : (0,1)
-    /// };
-    /// let actual: GeLineq = variable.to_lineq_neg();
-    /// assert_eq!(actual.bias, 0);
-    /// assert_eq!(actual.bounds, vec![(0,1)]);
-    /// assert_eq!(actual.coeffs, vec![-1]);
-    /// assert_eq!(actual.indices, vec![0]);
-    /// ```
-    pub fn to_lineq_neg(&self) -> GeLineq {
-        return GeLineq {
-            coeffs: vec![-1],
-            bias: 0,
-            bounds: vec![(0,1)],
-            indices: vec![self.id]
-        }
-    }
-}
 
 /// Data structure for representing an `at least` constraint on form 
 /// $$ c * v_0 + c * v_1 + ... + c * v_n + bias \ge 0 $$
@@ -480,8 +43,8 @@ impl AtLeast {
     /// 
     /// ```
     /// use puanrs::AtLeast;
-    /// use puanrs::GeLineq;
-    /// use puanrs::Variable;
+    /// use puanrs::polyopt::GeLineq;
+    /// use puanrs::polyopt::Variable;
     /// use std::{collections::HashMap};
     /// let at_least: AtLeast = AtLeast {
     ///     ids     : vec![0,1,2],
@@ -687,8 +250,8 @@ impl Theory {
     /// use puanrs::Theory;
     /// use puanrs::Statement;
     /// use puanrs::AtLeast;
-    /// use puanrs::Variable;
-    /// use puanrs::GeLineq;
+    /// use puanrs::polyopt::Variable;
+    /// use puanrs::polyopt::GeLineq;
     /// let theory: Theory = Theory {
     ///     id          : String::from("A"),
     ///     statements  : vec![
@@ -761,11 +324,163 @@ impl Theory {
         }
         return lineqs;
     }
+
+    /// Converts Theory into a polyhedron. Set `active` param to true
+    /// to activate polyhedron, meaning assuming the top node to be true. 
+    /// Set `reduced` to true to potentially retrieve a reduced polyhedron.
+    pub fn to_polyhedron(&self, active: bool, reduced: bool) -> Polyhedron {
+        let lineqs = self.to_lineqs(active, reduced);
+        let mut index_bound_vec: Vec<(u32, (i64,i64))> = Vec::default();
+        for lineq in lineqs.iter() {
+            for (index, bound) in lineq.indices.iter().zip(lineq.bounds.iter()) {
+                let element = (*index, *bound);
+                if !index_bound_vec.contains(&element) {
+                    index_bound_vec.push(element);
+                }
+            }
+        }
+
+        let actual_indices: Vec<u32> = index_bound_vec.iter().map(|x| x.0).sorted().collect();
+        let new_indices: Vec<u32> = (0..actual_indices.len()).into_iter().map(|x| x as u32).collect();
+        let indices_map: HashMap<u32, u32> = actual_indices.clone().into_iter().zip(new_indices).collect();
+
+        let n_rows = lineqs.len(); 
+        let n_cols = indices_map.len();
+
+        let mut val: Vec<f64> = vec![0.0; n_rows*n_cols];
+        for (i, lineq) in lineqs.iter().enumerate() {
+            for (j, cf) in lineq.indices.iter().map(|j| j).zip(lineq.coeffs.iter().map(|x| (*x) as f64)) {
+                let new_index: usize = indices_map[j] as usize;
+                val[i*n_cols + new_index] = cf;
+            }
+        }
+
+        let index_bound_hm : HashMap<u32, (i64, i64)> = index_bound_vec.clone().into_iter().collect();
+        let variables: Vec<Variable> = actual_indices.iter().filter_map(|i| {
+            if let Some(bounds) = index_bound_hm.get(i) {
+                return Some(
+                    Variable {
+                        id: *i,
+                        bounds: bounds.clone()
+                    }
+                )
+            }
+            return None;
+        }).collect();
+        return Polyhedron {
+            a: linalg::Matrix { 
+                val: val, 
+                ncols: n_cols, 
+                nrows: n_rows,
+            },
+            b: lineqs.iter().map(|x| (-1*x.bias) as f64).collect(),
+            variables: variables.iter().map(|x| x.to_variable_float()).collect(),
+        };
+    }
+
+    /// Find solutions to this Theory. `objectives` is a vector of HashMap's pointing from
+    /// an id to a value. The solver will try to find a valid configuration that maximizes those values,
+    /// for each objective in objectives.
+    /// # Note
+    /// * Ids given in objectives which are not in Theory will be ignored.
+    /// * Ids which have not been given a value will be given 0 as default.
+    /// 
+    /// # Example:
+    /// 
+    /// ```
+    /// use puanrs::Theory;
+    /// use puanrs::Statement;
+    /// use puanrs::AtLeast;
+    /// use puanrs::polyopt::Variable;
+    /// let t = Theory {
+    ///    id: String::from("A"),
+    ///     statements: vec![
+    ///         Statement {
+    ///            variable: Variable { id: 0, bounds: (0,1) },
+    ///            expression: Some(
+    ///                AtLeast {
+    ///                    ids: vec![1,2],
+    ///                    bias: -1
+    ///                }
+    ///            )
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 1, bounds: (0,1) },
+    ///            expression: Some(
+    ///                AtLeast {
+    ///                    ids: vec![3,4],
+    ///                    bias: 1
+    ///                }
+    ///            )
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 2, bounds: (0,1) },
+    ///            expression: Some(
+    ///                AtLeast {
+    ///                    ids: vec![5,6,7],
+    ///                    bias: -3
+    ///                }
+    ///            )
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 3, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 4, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 5, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 6, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///        Statement {
+    ///            variable: Variable { id: 7, bounds: (0,1) },
+    ///            expression: None
+    ///        },
+    ///     ]
+    /// };
+    /// let actual_solutions = t.solve(
+    ///     vec![
+    ///         vec![(3, 1.0), (4, 1.0)].iter().cloned().collect(),
+    ///     ]
+    /// );
+    /// let expected_solutions = vec![
+    ///    vec![1,1,1,1,1],
+    /// ];
+    /// assert_eq!(actual_solutions[0].x, expected_solutions[0]);
+    pub fn solve(&self, objectives: Vec<HashMap<u32, f64>>) -> Vec<solver::IntegerSolution> {
+        let polyhedron: Polyhedron = self.to_polyhedron(true,true);
+        let _objectives: Vec<Vec<f64>> = objectives.iter().map(|x| {
+            let mut vector = vec![0.0; polyhedron.variables.len()];
+            for (k, v) in x.iter() {
+                let pot_index = polyhedron.variables.iter().position(|y| y.id == (*k));
+                if let Some(index) = pot_index {
+                    vector[index] = *v;
+                }
+            }
+            return vector;
+        }).collect();
+        return _objectives.iter().map(|objective| {
+            let ilp = solver::IntegerLinearProgram {
+                ge_ph: polyhedron.to_owned(),
+                eq_ph: Default::default(),
+                of: objective.to_vec(),
+            };
+            return ilp.solve();
+        }).collect();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::vec;
+
+    use crate::{linalg::Matrix, polyopt::VariableFloat};
 
     use super::*;
 
@@ -2308,14 +2023,20 @@ mod tests {
     fn test_solver(){
         let obj = vec![3.0, 1.0, -1.0, -1.0, 1.0];
         let ilp = solver::IntegerLinearProgram {
-            ge_ph: solver::Polyhedron {
+            ge_ph: Polyhedron {
                 a: linalg::Matrix { 
                     val: vec![-3.0, -3.0, 1.0, 1.0, 1.0], 
                     ncols: 5, 
                     nrows: 1 
                 },
                 b: vec![-3.0],
-                bounds: vec![(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0)]
+                variables: vec![
+                    VariableFloat {id: 3, bounds: (0.0, 1.0) },
+                    VariableFloat {id: 4, bounds: (0.0, 1.0) },
+                    VariableFloat {id: 5, bounds: (0.0, 1.0) },
+                    VariableFloat {id: 6, bounds: (0.0, 1.0) },
+                    VariableFloat {id: 7, bounds: (0.0, 1.0) }
+                ]
             },
             eq_ph: Default::default(),
             of: obj.to_vec(),
@@ -2325,5 +2046,411 @@ mod tests {
         assert_eq!(actual_solution.x, expected_solution_x);
         assert_eq!(actual_solution.z, 4);
     }
-}
 
+    #[test]
+    fn test_theory_to_polyhedron() {
+
+        fn validate(actual: Polyhedron, expected: Polyhedron) -> bool {
+            if actual.variables != expected.variables {
+                return false;
+            }
+
+            let variable_bounds: Vec<(f64, f64)> = actual.bounds();
+            let base : i64 = 2;
+            let max_combinations: i64 = base.pow(15);
+            let bound_ranges: Vec<std::ops::Range<i64>> = variable_bounds.iter().map(|x| Range {start: (x.0 as i64), end: (x.1 as i64)+1}).collect_vec();
+            let n_combinations : i64 = variable_bounds.iter().map(|x| ((x.1 as i64)+1)-(x.0 as i64)).product();
+            if n_combinations > max_combinations {
+                panic!("number of combinations ({n_combinations}) to test are more than allowed ({max_combinations})");
+            }
+
+            let combinations: Vec<Vec<i64>> = bound_ranges.clone().into_iter().multi_cartesian_product().collect();
+            let combination_matrix: Matrix = Matrix {
+                val: combinations.clone().into_iter().concat().iter().map(|x| (*x) as f64).collect(),
+                ncols: bound_ranges.len(),
+                nrows: combinations.len(),
+            };
+
+            let actual_dot: Matrix = actual.a.dot(&combination_matrix.transpose());
+            let actual_dot_cmp: Vec<bool> = actual_dot.val.chunks(actual_dot.nrows).map(|x| {
+                x.iter().zip(actual.b.clone()).map(|(v0,v1)| (*v0) >= v1).collect()
+            }).concat();
+            let expected_dot: Matrix = expected.a.dot(&combination_matrix.transpose());
+            let expected_dot_cmp: Vec<bool> = expected_dot.val.chunks(expected_dot.nrows).map(|x| {
+                x.iter().zip(expected.b.clone()).map(|(v0,v1)| (*v0) >= v1).collect()
+            }).concat();
+
+            return actual_dot_cmp == expected_dot_cmp;
+        }
+
+        // Depth 3
+        // 0: 1 & 2
+        // 1: 3 + 4 >= 6 (3 has bounds (-5,5), 4 is bool) 
+        // 2: 5 + 6 >= 4 (5 has bounds (-3,3), 6 is bool) 
+
+        // Since each variable must be set to their max we can
+        // reduce into one single constraint (3)+(4)+(5)+(6) >= 10
+
+        // Expected constraints:
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: -6
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -4
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (-5,5) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (-3,3) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        
+        let expected: Polyhedron = Polyhedron { 
+            a: linalg::Matrix { 
+                val: vec![1.0, 1.0, 1.0, 1.0], 
+                ncols: 4, 
+                nrows: 1 
+            },
+            b: vec![10.0],
+            variables: vec![
+                VariableFloat {
+                    id: 3,
+                    bounds: (-5.0, 5.0),
+                },
+                VariableFloat {
+                    id: 4,
+                    bounds: (0.0, 1.0),
+                },
+                VariableFloat {
+                    id: 5,
+                    bounds: (-3.0, 3.0),
+                },
+                VariableFloat {
+                    id: 6,
+                    bounds: (0.0, 1.0),
+                },
+            ]
+        };
+        assert!(validate(t.to_polyhedron(true, true), expected));
+
+        // Depth 4
+        // 0: 1 & 2 & 3
+        // 1: 4 | 5
+        // 2: 5 | 6
+        // 3: 7 & 8
+        // 4: 9 & 10
+        // 5: -11
+        // 6: 12 | 13
+
+        // We test two things:
+        // 1) sharing variable works (both 1 and 2 has 5 as child and is reducable)
+        // 2) direct reducement works (0 and 3 has same constraint, therefore 0 should have 7 and 8 directly as children)  <- NOT IMPLEMENTED
+
+        // Expected constraints:
+        //   ( 1) +( 2) +( 3) -3
+        // -2( 3) +( 7) +( 8) +0
+        // -1(11) +(12) +(13) +0 (instead of 5 & 6)
+        //   ( 9) +(10)-2(11) +0 (instead of 4 & 5)
+
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2,3],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![4,5],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![7,8],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![9,10],
+                            bias: -2
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![11],
+                            bias: 0
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![12,13],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 8, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 9, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 10, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 11, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 12, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 13, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+
+        let expected: Polyhedron = Polyhedron { 
+            a: linalg::Matrix { 
+                val: vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -2.0, 0.0, 0.0], 
+                ncols: 10, 
+                nrows: 4
+            },
+            b: vec![3.0, 0.0, 0.0, 0.0],
+            variables: vec![
+                VariableFloat {id: 1, bounds: (0.0, 1.0)},
+                VariableFloat {id: 2, bounds: (0.0, 1.0)},
+                VariableFloat {id: 3, bounds: (0.0, 1.0)},
+                VariableFloat {id: 7, bounds: (0.0, 1.0)},
+                VariableFloat {id: 8, bounds: (0.0, 1.0)},
+                VariableFloat {id: 9, bounds: (0.0, 1.0)},
+                VariableFloat {id: 10, bounds: (0.0, 1.0)},
+                VariableFloat {id: 11, bounds: (0.0, 1.0)},
+                VariableFloat {id: 12, bounds: (0.0, 1.0)},
+                VariableFloat {id: 13, bounds: (0.0, 1.0)},
+            ],
+            // variable_ids: vec![1, 2, 3, 7, 8, 9, 10, 11, 12, 13] 
+        };
+        assert!(validate(t.to_polyhedron(true, true), expected));
+
+        // Depth 3
+        // 0: 1 -> 2
+        // 1: 3 & 4
+        // 2: 5 & 6 & 7
+        // Expects to be reduced into 1 constraint
+        // -3(3)-3(4)+(5)+(6)+(7)-3 >= 0 
+
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+
+        let expected: Polyhedron = Polyhedron { 
+            a: linalg::Matrix { 
+                val: vec![-3.0, -3.0, 1.0, 1.0, 1.0], 
+                ncols: 5, 
+                nrows: 1
+            },
+            b: vec![-3.0],
+            variables: vec![
+                VariableFloat {id: 3, bounds: (0.0, 1.0)},
+                VariableFloat {id: 4, bounds: (0.0, 1.0)},
+                VariableFloat {id: 5, bounds: (0.0, 1.0)},
+                VariableFloat {id: 6, bounds: (0.0, 1.0)},
+                VariableFloat {id: 7, bounds: (0.0, 1.0)},
+            ],
+        };
+        assert!(validate(t.to_polyhedron(true, true), expected));
+    }
+
+    #[test]
+    fn test_theory_solve() {
+        let t = Theory {
+            id: String::from("A"),
+            statements: vec![
+                Statement {
+                    variable: Variable { id: 0, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![1,2],
+                            bias: -1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 1, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![3,4],
+                            bias: 1
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 2, bounds: (0,1) },
+                    expression: Some(
+                        AtLeast {
+                            ids: vec![5,6,7],
+                            bias: -3
+                        }
+                    )
+                },
+                Statement {
+                    variable: Variable { id: 3, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 4, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 5, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 6, bounds: (0,1) },
+                    expression: None
+                },
+                Statement {
+                    variable: Variable { id: 7, bounds: (0,1) },
+                    expression: None
+                },
+            ]
+        };
+        let actual_solutions = t.solve(
+            vec![
+                vec![(3, 1.0), (4, 1.0)].iter().cloned().collect(),
+                vec![(3, 2.0), (4, 1.0), (5, -1.0), (6, -1.0), (7, -1.0)].iter().cloned().collect(),
+                // vec![3.0, 1.0,-1.0,-1.0, 1.0],
+            ]);
+        let expected_solutions = vec![
+            vec![1,1,1,1,1],
+            vec![1,0,0,0,0],
+            // vec![1,0,0,0,1],
+        ];
+        assert!(actual_solutions.iter().zip(expected_solutions).all(|(x,y)| x.x == y));
+    }
+}
