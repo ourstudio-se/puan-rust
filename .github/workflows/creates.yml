@@ -1,8 +1,6 @@
 on:
   release:
-    # Pattern matched against refs/tags
-    tags:        
-      - '*'           # Push events to every tag not containing /
+    types: [published]
 
 name: Publish
 
