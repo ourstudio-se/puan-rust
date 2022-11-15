@@ -381,9 +381,11 @@ impl Theory {
     /// Find solutions to this Theory. `objectives` is a vector of HashMap's pointing from
     /// an id to a value. The solver will try to find a valid configuration that maximizes those values,
     /// for each objective in objectives.
-    /// Note. Ids given in objectives which are not in Theory will be ignored. Ids which have not been given a value will be given 0 as default.
+    /// # Note
+    /// * Ids given in objectives which are not in Theory will be ignored.
+    /// * Ids which have not been given a value will be given 0 as default.
     /// 
-    /// /// # Example:
+    /// # Example:
     /// 
     /// ```
     /// use puanrs::Theory;
