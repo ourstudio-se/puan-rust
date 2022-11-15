@@ -3,6 +3,7 @@
 //! Beta version of simplex solver for linear and integer linear programs.
 //! 
 
+use itertools::Itertools;
 use linalg::Matrix;
 
 use crate::linalg;
@@ -21,7 +22,7 @@ pub struct Polyhedron {
 }
 impl Clone for Polyhedron {
     fn clone(&self) -> Self {
-        return Polyhedron { a: self.a.clone(), b: self.b.clone(), bounds: self.bounds.clone() }
+        Polyhedron { a: self.a.clone(), b: self.b.clone(), bounds: self.bounds.clone() }
     }
 }
 
@@ -219,16 +220,35 @@ fn _simplex_phase_one(lp: &StandardFormLP) -> (StandardFormLP, BFS) {
                                 of: new_of.clone()}, 
                                 &BFS{
                                     x: lp.eq_ph.b.clone(),
-                                    b_vars: b_vars, n_vars: n_vars, sub_vars: Default::default()
+                                    b_vars, n_vars, sub_vars: Default::default()
                                 });
     }
-    let hej = Matrix {val: new_bfs.x.clone(), nrows: 1, ncols: new_bfs.x.len()}.dot(&Matrix{val: new_of.clone(), ncols: new_of.len(), nrows: 1}.get_columns(&new_bfs.b_vars).transpose());
-    if hej.val[0] < 0.0 {
+    let res = Matrix {val: new_bfs.x.clone(), nrows: 1, ncols: new_bfs.x.len()}.dot(&Matrix{val: new_of.clone(), ncols: new_of.len(), nrows: 1}.get_columns(&new_bfs.b_vars).transpose());
+    if res.val[0] < 0.0 {
         // No feasible solution exists
         return (lp.clone(), Default::default());
     } else {
-        return (StandardFormLP{ eq_ph: Polyhedron{ a: updated_lp.eq_ph.a.get_columns(&(0..lp.eq_ph.a.ncols).collect()), b: updated_lp.eq_ph.b, bounds: updated_lp.eq_ph.bounds[0..lp.eq_ph.a.ncols].to_vec()}, of: lp.of.clone()},
-        BFS { x: new_bfs.x, b_vars: new_bfs.b_vars, n_vars: new_bfs.n_vars.into_iter().filter(|x| *x < lp.eq_ph.a.ncols).collect::<Vec<usize>>(), sub_vars: new_bfs.sub_vars})
+        let mut b_vars = new_bfs.b_vars.clone();
+        let mut n_vars = new_bfs.n_vars.clone();
+        let mut b_inv = linalg::identity_matrix(b_vars.len());
+        let mut a = updated_lp.eq_ph.a.clone();
+        for index in 0..b_vars.len(){
+            if b_vars[index] >= lp.eq_ph.a.ncols {
+                let incoming_variable = n_vars.iter().find_or_first(|x| **x < lp.eq_ph.a.ncols).unwrap();
+                let b_inv_n_j = b_inv.dot(&Matrix { val : a.val.iter().skip(*incoming_variable).step_by(a.ncols).copied().collect(), ncols: 1, nrows: a.nrows});
+                let mut e = linalg::identity_matrix(b_vars.len());
+                e.val = e.update_column(index, &Matrix{val: (b_inv_n_j.val).iter().map(|x| -x).collect(), nrows: b_inv_n_j.nrows, ncols: b_inv_n_j.ncols}.divide(&Matrix{val: vec![(b_inv_n_j.val)[index]], ncols: 1, nrows:1}).val).val;
+                e.val[index*e.ncols + index] = if b_inv_n_j.val[index] != 0. {1./b_inv_n_j.val[index]} else {f64::MAX};
+                b_inv = e.dot(&b_inv);
+                b_vars[index] = *incoming_variable;
+                n_vars = n_vars.iter().filter(|x| **x != *incoming_variable).map(|x| *x).collect();
+            }
+        }
+        a = b_inv.dot(&a);
+        let b = b_inv.dot(&Matrix{val: updated_lp.eq_ph.b.to_vec(), ncols: 1, nrows: updated_lp.eq_ph.b.len()});
+
+        return (StandardFormLP{ eq_ph: Polyhedron{ a: a.get_columns(&(0..lp.eq_ph.a.ncols).collect()), b: b.val.to_vec(), bounds: updated_lp.eq_ph.bounds[0..lp.eq_ph.a.ncols].to_vec()}, of: lp.of.clone()},
+        BFS { x: b.val.to_vec(), b_vars: b_vars, n_vars: n_vars.into_iter().filter(|x| *x < lp.eq_ph.a.ncols).collect::<Vec<usize>>(), sub_vars: new_bfs.sub_vars})
     }
 }
 
@@ -316,11 +336,9 @@ pub fn solve_ilp(lp: &IntegerLinearProgram) -> IntegerSolution {
             for i in 0..explored_nodes.len(){
                 node_explored = true;
                 for j in 0..explored_nodes[i].len(){
-                    if j < bounds1.len() {
-                        if !(explored_nodes[i][j].0 == bounds1[j].0 && explored_nodes[i][j].1 == bounds1[j].1) {
-                            node_explored = false;
-                            continue;
-                        }
+                    if j < bounds1.len() && !(explored_nodes[i][j].0 == bounds1[j].0 && explored_nodes[i][j].1 == bounds1[j].1) {
+                        node_explored = false;
+                        continue;
                     }
                 }
                 if node_explored {
@@ -339,11 +357,9 @@ pub fn solve_ilp(lp: &IntegerLinearProgram) -> IntegerSolution {
             for i in 0..explored_nodes.len(){
                 node_explored = true;
                 for j in 0..explored_nodes[i].len(){
-                    if j < bounds2.len() {
-                        if !(explored_nodes[i][j].0 == bounds2[j].0 && explored_nodes[i][j].1 == bounds2[j].1) {
-                            node_explored = false;
-                            continue;
-                        }
+                    if j < bounds2.len() && !(explored_nodes[i][j].0 == bounds2[j].0 && explored_nodes[i][j].1 == bounds2[j].1) {
+                        node_explored = false;
+                        continue;
                     }
                 }
                 if node_explored {

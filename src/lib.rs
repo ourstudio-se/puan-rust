@@ -2304,4 +2304,26 @@ mod tests {
         ];
         assert!(validate_theory_lineqs(t.clone(), actual, expected));
     }
+    #[test]
+    fn test_solver(){
+        let obj = vec![3.0, 1.0, -1.0, -1.0, 1.0];
+        let ilp = solver::IntegerLinearProgram {
+            ge_ph: solver::Polyhedron {
+                a: linalg::Matrix { 
+                    val: vec![-3.0, -3.0, 1.0, 1.0, 1.0], 
+                    ncols: 5, 
+                    nrows: 1 
+                },
+                b: vec![-3.0],
+                bounds: vec![(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0),(0.0, 1.0)]
+            },
+            eq_ph: Default::default(),
+            of: obj.to_vec(),
+        };
+        let actual_solution = ilp.solve();
+        let expected_solution_x = vec![1,0,0,0,1];
+        assert_eq!(actual_solution.x, expected_solution_x);
+        assert_eq!(actual_solution.z, 4);
+    }
 }
+
