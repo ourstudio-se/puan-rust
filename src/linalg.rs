@@ -27,7 +27,7 @@ impl Clone for Matrix {
 
 impl PartialEq for Matrix {
     fn eq(&self, other: &Self) -> bool {
-        return (self.val == other.val) & (self.ncols == other.ncols) & (self.nrows == other.nrows);
+        (self.val == other.val) & (self.ncols == other.ncols) & (self.nrows == other.nrows)
     }
 }
 

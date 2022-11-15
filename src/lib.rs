@@ -327,7 +327,7 @@ impl Theory {
 
     /// Converts Theory directly into a polyhedron. Set `active` param to true
     /// to activate polyhedron, meaning assuming the top node to be true. 
-    /// Set `reduced` to true to retrieve a (maybe) reduced polyhedron.
+    /// Set `reduced` to true to potentially retrieve a reduced polyhedron.
     pub fn to_polyhedron(&self, active: bool, reduced: bool) -> Polyhedron {
         let lineqs = self.to_lineqs(active, reduced);
         let mut index_bound_vec: Vec<(u32, (i64,i64))> = Vec::default();
@@ -378,12 +378,10 @@ impl Theory {
         };
     }
 
-    /// Find solutions to this Theory directly. `objectives` is a vector of HashMap's pointing from
-    /// an id to a value. The solver will try and find a valid configuration that maximizes those values,
+    /// Find solutions to this Theory. `objectives` is a vector of HashMap's pointing from
+    /// an id to a value. The solver will try to find a valid configuration that maximizes those values,
     /// for each objective in objectives.
-    /// NOTES 
-    ///     - Ids given in objectives which are not in Theory will be ignored
-    ///     - Ids which have not been given a value will be given 0 as default.
+    /// Note. Ids given in objectives which are not in Theory will be ignored. Ids which have not been given a value will be given 0 as default.
     /// 
     /// /// # Example:
     /// 
