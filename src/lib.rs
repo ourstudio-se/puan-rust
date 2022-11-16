@@ -54,14 +54,15 @@ impl AtLeast {
     /// variable_hm.insert(0, Variable {id: 0, bounds: (0,1)});
     /// variable_hm.insert(1, Variable {id: 1, bounds: (0,1)});
     /// variable_hm.insert(2, Variable {id: 2, bounds: (0,1)});
-    /// let actual: GeLineq = at_least.to_lineq(&variable_hm);
+    /// let actual: GeLineq = at_least.to_lineq(None, &variable_hm);
     /// assert_eq!(actual.coeffs, vec![1,1,1]);
     /// assert_eq!(actual.bias, -1);
     /// assert_eq!(actual.bounds, vec![(0,1),(0,1),(0,1)]);
     /// assert_eq!(actual.indices, vec![0,1,2]);
     /// ```
-    pub fn to_lineq(&self, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
+    pub fn to_lineq(&self, id: Option<u32>, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
         return GeLineq {
+            id: id,
             coeffs: vec![match self.bias >= 0 {true => -1, false => 1}; self.size()],
             bias: self.bias,
             bounds: self.ids.iter().map(
@@ -82,7 +83,7 @@ impl AtLeast {
     fn to_lineq_extended(&self, given_id: u32, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
         return GeLineq::merge_disj(
             &(variable_hm.get(&given_id).expect(&format!("variable id `{given_id}` does not exist in variable hash map"))).to_lineq_neg(),
-            &self.to_lineq(variable_hm)
+            &self.to_lineq(Some(given_id), variable_hm)
         ).expect("could not merge disjunctions") // <- should always be able to merge here
     }
 
@@ -94,7 +95,7 @@ impl AtLeast {
                 let sub_lineqs: Vec<GeLineq> = self.ids.iter().filter_map(|id| {
                     if let Some(statement) = statement_hm.get(id) {
                         if let Some(expression) = statement.expression.clone() {
-                            return Some(expression.to_lineq(variable_hm));
+                            return Some(expression.to_lineq(Some(given_id), variable_hm));
                         }
                     }
                     return None;
@@ -104,13 +105,13 @@ impl AtLeast {
                         return lineq;
                     } else {
                         return match extend_default {
-                            false => self.to_lineq(variable_hm),
+                            false => self.to_lineq(Some(given_id), variable_hm),
                             true => self.to_lineq_extended(given_id, variable_hm),
                         }
                     }
                 } else {
                     return match extend_default {
-                        false => self.to_lineq(variable_hm),
+                        false => self.to_lineq(Some(given_id), variable_hm),
                         true => self.to_lineq_extended(given_id, variable_hm),
                     }
                 }
@@ -119,7 +120,7 @@ impl AtLeast {
                 let sub_lineqs: Vec<GeLineq> = self.ids.iter().filter_map(|id| {
                     if let Some(statement) = statement_hm.get(id) {
                         if let Some(expression) = statement.expression.clone() {
-                            return Some(expression.to_lineq(variable_hm));
+                            return Some(expression.to_lineq(Some(given_id), variable_hm));
                         }
                     }
                     return None;
@@ -129,19 +130,19 @@ impl AtLeast {
                         return lineq;
                     } else {
                         return match extend_default {
-                            false => self.to_lineq(variable_hm),
+                            false => self.to_lineq(Some(given_id), variable_hm),
                             true => self.to_lineq_extended(given_id, variable_hm),
                         }
                     }
                 } else {
                     return match extend_default {
-                        false => self.to_lineq(variable_hm),
+                        false => self.to_lineq(Some(given_id), variable_hm),
                         true => self.to_lineq_extended(given_id, variable_hm),
                     }
                 }
             },
             _ => match extend_default {
-                false => self.to_lineq(variable_hm),
+                false => self.to_lineq(Some(given_id), variable_hm),
                 true => self.to_lineq_extended(given_id, variable_hm),
             }
         }
@@ -309,7 +310,7 @@ impl Theory {
                             )
                         ),
                         false => match (statement.variable.id == top_node_id) & active {
-                            true => Some(a.to_lineq(&var_hm)),
+                            true => Some(a.to_lineq(Some(statement.variable.id), &var_hm)),
                             false => Some(a.to_lineq_extended(statement.variable.id, &var_hm))
                         }
                     },
@@ -375,6 +376,7 @@ impl Theory {
             },
             b: lineqs.iter().map(|x| (-1*x.bias) as f64).collect(),
             variables: variables.iter().map(|x| x.to_variable_float()).collect(),
+            index: lineqs.iter().map(|x| x.id).collect(),
         };
     }
 
@@ -991,12 +993,14 @@ mod tests {
 
         // Disjunction merge between 1-1
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -1,
@@ -1007,12 +1011,14 @@ mod tests {
         // }
         // Disjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 2,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 0,
@@ -1022,12 +1028,14 @@ mod tests {
 
         // Disjunction merge between 1-1
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : 0,
@@ -1037,12 +1045,14 @@ mod tests {
 
         // Disjunction merge between 1-2
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 3,
@@ -1052,12 +1062,14 @@ mod tests {
 
         // Disjunction merge between 1-3
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 0,
@@ -1067,12 +1079,14 @@ mod tests {
 
         // Disjunction merge between 1-4
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -4,
@@ -1082,12 +1096,14 @@ mod tests {
 
         // Disjunction merge between 1-5
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -2,
@@ -1097,12 +1113,14 @@ mod tests {
 
         // Disjunction merge between 1-6
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 2,
@@ -1112,12 +1130,14 @@ mod tests {
 
         // Disjunction merge between 2-2
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 2,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 3,
@@ -1127,12 +1147,14 @@ mod tests {
 
         // Disjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 2,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 0,
@@ -1142,12 +1164,14 @@ mod tests {
 
         // Disjunction merge between 2-4
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 2,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -4,
@@ -1157,12 +1181,14 @@ mod tests {
 
         // Disjunction merge between 2-5
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 2,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -2,
@@ -1172,12 +1198,14 @@ mod tests {
 
         // Disjunction merge between 2-6
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 2,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 2,
@@ -1187,12 +1215,14 @@ mod tests {
 
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -3,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -3,
@@ -1202,12 +1232,14 @@ mod tests {
 
         // Conjunction merge between 4-3
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -3,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 0,
@@ -1217,12 +1249,14 @@ mod tests {
 
         // Conjunction merge between 1-4
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -4,
@@ -1232,12 +1266,14 @@ mod tests {
 
         // Conjunction merge between 2-3
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 2,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 0,
@@ -1247,12 +1283,14 @@ mod tests {
 
         // Conjunction merge between 2-4
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 2,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -4,
@@ -1262,12 +1300,14 @@ mod tests {
 
         // Conjunction merge between 3-3
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 0,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 0,
@@ -1277,12 +1317,14 @@ mod tests {
 
         // Conjunction merge between 3-4
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 0,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -4,
@@ -1292,12 +1334,14 @@ mod tests {
 
         // Conjunction merge between 3-5
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 0,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -2,
@@ -1307,12 +1351,14 @@ mod tests {
 
         // Conjunction merge between 3-6
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 0,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 2,
@@ -1322,12 +1368,14 @@ mod tests {
 
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -3,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -4,
@@ -1337,12 +1385,14 @@ mod tests {
 
         // Conjunction merge between 4-5
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -3,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -2,
@@ -1352,12 +1402,14 @@ mod tests {
 
         // Conjunction merge between 4-6
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -3,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1, -1, -1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : 2,
@@ -1367,12 +1419,14 @@ mod tests {
 
         // Conjunction merge between 4-4
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 3,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -4,
@@ -1382,12 +1436,14 @@ mod tests {
 
         // Disjunction merge, special case
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(-2, -1), (2, 3), (2, 3)],
             bias    : -3,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -1,
@@ -1397,12 +1453,14 @@ mod tests {
 
         // Conjunction merge, special case
         let ge_lineq1:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(-2, -1), (2, 3), (2, 3)],
             bias    : -5,
             indices : vec![1, 2, 3]
         };
         let ge_lineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
             bias    : -1,
@@ -1449,12 +1507,14 @@ mod tests {
 
         // Negative bias on sub lineq
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -2,
             indices : vec![1, 2, 3]
         };
         let sub_gelineq: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -2,
@@ -1463,12 +1523,14 @@ mod tests {
         assert!(validate_substitution(main_gelineq, sub_gelineq, 3));
 
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -2,
             indices : vec![1, 2, 3]
         };
         let sub_gelineq: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -1,
@@ -1478,12 +1540,14 @@ mod tests {
 
         // Positive bias on sub lineq
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -2,
             indices : vec![1, 2, 3]
         };
         let sub_gelineq: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, -1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : 1,
@@ -1493,12 +1557,14 @@ mod tests {
 
         // Not possible to substitute
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -2,
             indices : vec![1, 2, 3]
         };
         let sub_gelineq: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : 0,
@@ -1507,12 +1573,14 @@ mod tests {
         assert!(!validate_substitution(main_gelineq, sub_gelineq, 3));
 
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1],
             bounds  : vec![(0, 1)],
             bias    : 0,
             indices : vec![1]
         };
         let sub_gelineq: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1],
             bounds  : vec![(0, 10)],
             bias    : -3,
@@ -1526,12 +1594,14 @@ mod tests {
 
         // Mixed signs of coeffs in sub lineq, possible to merge
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -2,
             indices : vec![1, 2, 3]
         };
         let sub_gelineq: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![-1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -1,
@@ -1540,12 +1610,14 @@ mod tests {
         assert!(validate_substitution(main_gelineq, sub_gelineq, 3));
 
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -2,
             indices : vec![1, 2]
         };
         let sub_gelineq: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -1,
@@ -1554,12 +1626,14 @@ mod tests {
         assert!(validate_substitution(main_gelineq, sub_gelineq, 2));
 
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -1,
             indices : vec![1, 2]
         };
         let sub_gelineq: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -1,
@@ -1568,18 +1642,21 @@ mod tests {
         assert!(validate_substitution(main_gelineq, sub_gelineq, 2));
 
         let main_gelineq:GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1, 1],
             bounds  : vec![(0, 1), (0, 1), (0, 1)],
             bias    : -2,
             indices : vec![1, 2, 3]
         };
         let sub_gelineq1: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -2,
             indices : vec![4, 5]
         };
         let sub_gelineq2: GeLineq = GeLineq {
+            id: None,
             coeffs  : vec![1, 1],
             bounds  : vec![(0, 1), (0, 1)],
             bias    : -2,
@@ -1617,7 +1694,8 @@ mod tests {
 
         assert!(
             validate_all_combinations_single_min_max(
-                GeLineq { 
+                GeLineq {
+                    id: None, 
                     coeffs: vec![2, 1, 1],
                     bounds: vec![(0,1),(0,1),(0,1)],
                     bias: -1,
@@ -1628,7 +1706,8 @@ mod tests {
         );
         assert!(
             !validate_all_combinations_single_min_max(
-                GeLineq { 
+                GeLineq {
+                    id: None, 
                     coeffs: vec![2, 1, 1],
                     bounds: vec![(-2,-1),(0,1),(0,1)],
                     bias: 0,
@@ -1639,7 +1718,8 @@ mod tests {
         );
         assert!(
             validate_all_combinations_single_min_max(
-                GeLineq { 
+                GeLineq {
+                    id: None, 
                     coeffs: vec![5, 6, 3],
                     bounds: vec![(0,1),(0,1),(0,1)],
                     bias: -1,
@@ -1650,7 +1730,8 @@ mod tests {
         );
         assert!(
             validate_all_combinations_single_min_max(
-                GeLineq { 
+                GeLineq {
+                    id: None, 
                     coeffs: vec![-2, -1, -1],
                     bounds: vec![(0,1),(0,1),(0,1)],
                     bias: 0,
@@ -1661,7 +1742,8 @@ mod tests {
         );
         assert!(
             validate_all_combinations_single_min_max(
-                GeLineq { 
+                GeLineq {
+                    id: None, 
                     coeffs: vec![-2, -1, -1],
                     bounds: vec![(0,1),(0,1),(0,1)],
                     bias: 1,
@@ -1672,7 +1754,8 @@ mod tests {
         );
         assert!(
             !validate_all_combinations_single_min_max(
-                GeLineq { 
+                GeLineq {
+                    id: None, 
                     coeffs: vec![-2, 1, 1],
                     bounds: vec![(0,1),(0,1),(0,1)],
                     bias: 0,
@@ -1958,18 +2041,21 @@ mod tests {
         let actual: Vec<GeLineq> = t.to_lineqs(false, false);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
+                id: None,
                 bias: 0,
                 bounds: vec![(0,1),(0,1),(0,1)],
                 coeffs: vec![-1,1,1],
                 indices: vec![0,1,2]
             },
             GeLineq {
+                id: None,
                 bias: 0,
                 bounds: vec![(0,1),(0,1),(0,1),(0,1)],
                 coeffs: vec![-3,1,1,1],
                 indices: vec![2,5,6,7]
             },
             GeLineq {
+                id: None,
                 bias: 2,
                 bounds: vec![(0,1),(0,1),(0,1)],
                 coeffs: vec![-1,-1,-1],
@@ -1980,18 +2066,21 @@ mod tests {
         let actual: Vec<GeLineq> = t.to_lineqs(true, false);
         let expected: Vec<GeLineq> = vec![
             GeLineq {
+                id: None,
                 bias: -1,
                 bounds: vec![(0,1),(0,1)],
                 coeffs: vec![1,1],
                 indices: vec![1,2]
             },
             GeLineq {
+                id: None,
                 bias: 0,
                 bounds: vec![(0,1),(0,1),(0,1),(0,1)],
                 coeffs: vec![-3,1,1,1],
                 indices: vec![2,5,6,7]
             },
             GeLineq {
+                id: None,
                 bias: 2,
                 bounds: vec![(0,1),(0,1),(0,1)],
                 coeffs: vec![-1,-1,-1],
@@ -2002,6 +2091,7 @@ mod tests {
         let actual: Vec<GeLineq> = t.to_lineqs(false, true); // reduce overrides active
         let expected: Vec<GeLineq> = vec![
             GeLineq {
+                id: None,
                 bias: 3,
                 bounds: vec![(0,1),(0,1),(0,1),(0,1),(0,1)],
                 coeffs: vec![-3,-3,1,1,1],
@@ -2012,6 +2102,7 @@ mod tests {
         let actual: Vec<GeLineq> = t.to_lineqs(true, true); // same as previous
         let expected: Vec<GeLineq> = vec![
             GeLineq {
+                id: None,
                 bias: 3,
                 bounds: vec![(0,1),(0,1),(0,1),(0,1),(0,1)],
                 coeffs: vec![-3,-3,1,1,1],
@@ -2037,7 +2128,8 @@ mod tests {
                     VariableFloat {id: 5, bounds: (0.0, 1.0) },
                     VariableFloat {id: 6, bounds: (0.0, 1.0) },
                     VariableFloat {id: 7, bounds: (0.0, 1.0) }
-                ]
+                ],
+                index: (0..1).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: obj.to_vec(),
@@ -2166,7 +2258,8 @@ mod tests {
                     id: 6,
                     bounds: (0.0, 1.0),
                 },
-            ]
+            ],
+            index: (0..1).map(|x| Some(x as u32)).collect(),
         };
         assert!(validate(t.to_polyhedron(true, true), expected));
 
@@ -2305,6 +2398,7 @@ mod tests {
                 VariableFloat {id: 12, bounds: (0.0, 1.0)},
                 VariableFloat {id: 13, bounds: (0.0, 1.0)},
             ],
+            index: (0..4).map(|x| Some(x as u32)).collect(),
             // variable_ids: vec![1, 2, 3, 7, 8, 9, 10, 11, 12, 13] 
         };
         assert!(validate(t.to_polyhedron(true, true), expected));
@@ -2383,6 +2477,7 @@ mod tests {
                 VariableFloat {id: 6, bounds: (0.0, 1.0)},
                 VariableFloat {id: 7, bounds: (0.0, 1.0)},
             ],
+            index: (0..1).map(|x| Some(x as u32)).collect(),
         };
         assert!(validate(t.to_polyhedron(true, true), expected));
     }
