@@ -13,10 +13,15 @@ use crate::linalg;
 /// given by `bounds`. `Indices` represents the global indices of the variables. Note that the length of `coeffs`, `bounds` and `indices` must be the same.
 #[derive(Hash)]
 pub struct GeLineq {
+    /// `id` may be used as a reference for later purposes
     pub id      : Option<u32>,
+    /// Coefficients of the linear inequality
     pub coeffs  : Vec<i64>,
+    /// Bounds for every variable
     pub bounds  : Vec<(i64, i64)>,
+    /// `d` in a linear inequality $ ax+by+cz+d >= 0 $
     pub bias    : i64,
+    /// Id of each index
     pub indices : Vec<u32>
 }
 
