@@ -447,14 +447,15 @@ impl Theory {
     /// let actual_solutions = t.solve(
     ///     vec![
     ///         vec![(3, 1.0), (4, 1.0)].iter().cloned().collect(),
-    ///     ]
+    ///     ],
+    ///     true
     /// );
     /// let expected_solutions = vec![
-    ///    vec![1,1,1,1,1],
+    ///    vec![1,1,1,1,1], // <- notice that these are from reduced columns (3,4,5,6,7)
     /// ];
     /// assert_eq!(actual_solutions[0].x, expected_solutions[0]);
-    pub fn solve(&self, objectives: Vec<HashMap<u32, f64>>) -> Vec<solver::IntegerSolution> {
-        let polyhedron: Polyhedron = self.to_polyhedron(true,true);
+    pub fn solve(&self, objectives: Vec<HashMap<u32, f64>>, reduce_polyhedron: bool) -> Vec<solver::IntegerSolution> {
+        let polyhedron: Polyhedron = self.to_polyhedron(true,reduce_polyhedron);
         let _objectives: Vec<Vec<f64>> = objectives.iter().map(|x| {
             let mut vector = vec![0.0; polyhedron.variables.len()];
             for (k, v) in x.iter() {
@@ -2445,7 +2446,7 @@ mod tests {
                 vec![(3, 1.0), (4, 1.0)].iter().cloned().collect(),
                 vec![(3, 2.0), (4, 1.0), (5, -1.0), (6, -1.0), (7, -1.0)].iter().cloned().collect(),
                 // vec![3.0, 1.0,-1.0,-1.0, 1.0],
-            ]);
+            ], true);
         let expected_solutions = vec![
             vec![1,1,1,1,1],
             vec![1,0,0,0,0],
