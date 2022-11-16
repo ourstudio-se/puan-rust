@@ -154,12 +154,14 @@ fn convert_lp_to_standard_form(lp: &LinearProgram) -> StandardFormLP {
         new_bounds.push((0.0, f64::MAX));
         new_of.push(0.);
     }
-        
+    
+    let n_rows = new_a.nrows;
     return StandardFormLP {
         eq_ph: Polyhedron{
             a: new_a,
             b: new_b.to_vec(),
-            variables: new_bounds.iter().map(|b| VariableFloat { id: 0, bounds: *b}).collect()
+            variables: new_bounds.iter().map(|b| VariableFloat { id: 0, bounds: *b}).collect(),
+            index: (0..n_rows).map(|x| Some(x as u32)).collect(),
         },
         of: new_of.to_vec()
     }
@@ -200,7 +202,7 @@ fn _simplex_phase_one(lp: &StandardFormLP) -> (StandardFormLP, BFS) {
         return (lp.clone(), BFS {x: lp.eq_ph.b.clone(), b_vars: (new_a.ncols-new_a.nrows..new_a.ncols).collect(), n_vars: (0..new_a.ncols-new_a.nrows).collect(), sub_vars: Default::default()});
     } else {
         (updated_lp, new_bfs) = revised_simplex(
-            &StandardFormLP{ eq_ph: Polyhedron { a: new_a.clone(), b: lp.eq_ph.b.clone(), variables: new_bounds.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect() },
+            &StandardFormLP{ eq_ph: Polyhedron { a: new_a.clone(), b: lp.eq_ph.b.clone(), variables: new_bounds.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect(), index: lp.eq_ph.index.clone() },
                                 of: new_of.clone()}, 
                                 &BFS{
                                     x: lp.eq_ph.b.clone(),
@@ -231,7 +233,7 @@ fn _simplex_phase_one(lp: &StandardFormLP) -> (StandardFormLP, BFS) {
         a = b_inv.dot(&a);
         let b = b_inv.dot(&Matrix{val: updated_lp.eq_ph.b.to_vec(), ncols: 1, nrows: updated_lp.eq_ph.b.len()});
 
-        return (StandardFormLP{ eq_ph: Polyhedron{ a: a.get_columns(&(0..lp.eq_ph.a.ncols).collect()), b: b.val.to_vec(), variables: updated_lp.eq_ph.bounds()[0..lp.eq_ph.a.ncols].iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect()}, of: lp.of.clone()},
+        return (StandardFormLP{ eq_ph: Polyhedron{ a: a.get_columns(&(0..lp.eq_ph.a.ncols).collect()), b: b.val.to_vec(), variables: updated_lp.eq_ph.bounds()[0..lp.eq_ph.a.ncols].iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect(), index: updated_lp.eq_ph.index.clone()}, of: lp.of.clone()},
         BFS { x: b.val.to_vec(), b_vars: b_vars, n_vars: n_vars.into_iter().filter(|x| *x < lp.eq_ph.a.ncols).collect::<Vec<usize>>(), sub_vars: new_bfs.sub_vars})
     }
 }
@@ -332,8 +334,8 @@ pub fn solve_ilp(lp: &IntegerLinearProgram) -> IntegerSolution {
             }
             if !node_explored{
                 explored_nodes.push(bounds1.to_vec());
-                nodes_to_explore.push(LinearProgram{ge_ph: Polyhedron{ a: current_lp.ge_ph.a.clone(), b: current_lp.ge_ph.b.to_vec(), variables: bounds1.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect()},
-                                                    eq_ph: Polyhedron{ a: current_lp.eq_ph.a.clone(), b: current_lp.eq_ph.b.to_vec(), variables: bounds1.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect()},
+                nodes_to_explore.push(LinearProgram{ge_ph: Polyhedron{ a: current_lp.ge_ph.a.clone(), b: current_lp.ge_ph.b.to_vec(), variables: bounds1.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect(), index: current_lp.ge_ph.index.clone()},
+                                                    eq_ph: Polyhedron{ a: current_lp.eq_ph.a.clone(), b: current_lp.eq_ph.b.to_vec(), variables: bounds1.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect(), index: current_lp.eq_ph.index.clone()},
                                                     of: current_lp.of.to_vec()});
             }
             let mut node_explored = false;
@@ -353,8 +355,8 @@ pub fn solve_ilp(lp: &IntegerLinearProgram) -> IntegerSolution {
             }
             if !node_explored{
                 explored_nodes.push(bounds2.to_vec());
-                nodes_to_explore.push(LinearProgram{ge_ph: Polyhedron{ a: current_lp.ge_ph.a.clone(), b: current_lp.ge_ph.b.to_vec(), variables: bounds2.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect()},
-                                                    eq_ph: Polyhedron{ a: current_lp.eq_ph.a.clone(), b: current_lp.eq_ph.b.to_vec(), variables: bounds2.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect()},
+                nodes_to_explore.push(LinearProgram{ge_ph: Polyhedron{ a: current_lp.ge_ph.a.clone(), b: current_lp.ge_ph.b.to_vec(), variables: bounds2.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect(), index: current_lp.ge_ph.index.clone()},
+                                                    eq_ph: Polyhedron{ a: current_lp.eq_ph.a.clone(), b: current_lp.eq_ph.b.to_vec(), variables: bounds2.iter().map(|b| VariableFloat {id: 0, bounds: *b}).collect(), index: current_lp.eq_ph.index.clone()},
                                                     of: current_lp.of.to_vec()});
             }
         }
@@ -388,7 +390,8 @@ impl LinearProgram {
     ///                             ncols: 2
     ///                         },
     ///                         b: vec![4.0, 6.0],
-    ///                         variables: vec![ VariableFloat { id: 0, bounds: (0.0,f64::MAX) }, VariableFloat { id: 1, bounds: (0.0,f64::MAX) }]
+    ///                         variables: vec![ VariableFloat { id: 0, bounds: (0.0,f64::MAX) }, VariableFloat { id: 1, bounds: (0.0,f64::MAX) }],
+    ///                         index: vec![Some(0),Some(1)],
     ///                 },
     ///                 eq_ph: Default::default(),
     ///                 of: vec![-4.0, -5.0],
@@ -426,7 +429,8 @@ impl IntegerLinearProgram {
     ///                             ncols: 2
     ///                         },
     ///                         b: vec![4.0, 6.0],
-    ///                         variables: vec![ VariableFloat { id:0, bounds: (0.0,f64::MAX) }, VariableFloat { id: 1, bounds: (0.0,f64::MAX) }]
+    ///                         variables: vec![ VariableFloat { id:0, bounds: (0.0,f64::MAX) }, VariableFloat { id: 1, bounds: (0.0,f64::MAX) }],
+    ///                         index: vec![Some(0),Some(1)],
     ///                 },
     ///                 eq_ph: Default::default(),
     ///                 of: vec![-4.0, -5.0],
@@ -534,7 +538,7 @@ fn revised_simplex(lp: &StandardFormLP, bfs: &BFS) -> (StandardFormLP, BFS) {
     
     let a_new = b_inv.dot(&lp.eq_ph.a);
     
-    return (StandardFormLP{ eq_ph: Polyhedron {a: a_new, b: x_b.val.to_vec(), variables: lp.eq_ph.variables.clone()}, of: lp.of.clone()},
+    return (StandardFormLP{ eq_ph: Polyhedron {a: a_new, b: x_b.val.to_vec(), variables: lp.eq_ph.variables.clone(), index: lp.eq_ph.index.clone()}, of: lp.of.clone()},
             BFS { x: x_b.val, b_vars, n_vars, sub_vars})
 }
 
@@ -553,7 +557,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)},
                     VariableFloat { id: 0, bounds: (0.0,1.0)}
-                ]
+                ],
+                index: (0..2).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![1.0,1.0,1.0]
@@ -573,7 +578,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX) }, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX) },
-                ]
+                ],
+                index: (0..3).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![30.0,20.0]
@@ -593,7 +599,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0,40.0) }, 
                     VariableFloat { id: 0, bounds: (0.0,30.0) }
-                ]
+                ],
+                index: (0..2).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![30.0,20.0]
@@ -614,7 +621,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX) }, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX) }, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX) }
-                ]
+                ],
+                index: (0..4).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![-2.0,-1.0, -1.0]
@@ -634,7 +642,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}
-                ]
+                ],
+                index: (0..3).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![1.0, 1.0]
@@ -655,7 +664,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}
-                ]
+                ],
+                index: (0..1).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![5.0, 2.0]
@@ -678,7 +688,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)}
-                ]
+                ],
+                index: (0..1).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![7.0, 3.0, 2.0, 2.0]
@@ -699,7 +710,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}
-                ]
+                ],
+                index: (0..2).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![-4.0, -5.0]
@@ -719,7 +731,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}
-                ]
+                ],
+                index: (0..2).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![1.0, 5.0]
@@ -739,7 +752,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}
-                ]
+                ],
+                index: (0..3).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![5.0, 6.0]
@@ -761,7 +775,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}
-                ]
+                ],
+                index: (0..1).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![18.0, 8.0, 4.0, 2.0]
@@ -783,7 +798,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0,f64::MAX)}
-                ]
+                ],
+                index: (0..1).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![5.0, 10.0, 10.0, 16.0]
@@ -804,7 +820,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,2.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,2.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,2.0)}
-                ]
+                ],
+                index: (0..1).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![5.0, 6.0, 7.0]
@@ -827,7 +844,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)} 
-                ]
+                ],
+                index: (0..2).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![5.0, 7.0, 6.0, 4.0, 5.0]
@@ -849,7 +867,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)} 
-                ]
+                ],
+                index: (0..1).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![5.0, 8.0, 4.0, 6.0]
@@ -870,7 +889,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0, f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0, f64::MAX)}
-                ]
+                ],
+                index: (0..1).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![1.0, 1.0]
@@ -891,7 +911,8 @@ mod tests {
                 variables: vec![
                     VariableFloat { id: 0, bounds: (0.0, f64::MAX)}, 
                     VariableFloat { id: 0, bounds: (0.0, f64::MAX)}
-                ]
+                ],
+                index: (0..3).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![1.0, 1.0]
@@ -913,7 +934,8 @@ mod tests {
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)}, 
                     VariableFloat { id: 0, bounds: (0.0,1.0)}
-                ]
+                ],
+                index: (0..2).map(|x| Some(x as u32)).collect(),
             },
             eq_ph: Default::default(),
             of: vec![1.0,1.0,1.0]
