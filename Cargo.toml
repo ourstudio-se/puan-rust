@@ -1,6 +1,6 @@
 [package]
 name = "puan-rust"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Puan package contain tools for defining logic relationships among linear inequalities and reduction algorithms."
 license = "Apache-2.0"
