@@ -2,11 +2,11 @@
 //! 
 //! Ease work for preparing solving (integer) linear programs.
 
-use std::cmp;
+use crate::linalg;
 
+use std::cmp;
 use linalg::Matrix;
 
-use crate::linalg;
 
 /// Data structure for linear inequalities on the following form
 /// $$ c_0 * v_0 + c_1 * v_1 + ... + c_n * v_n + bias \ge 0 $$ for $ c \in $ `coeffs` and $ v $ are variables which can take on the values
