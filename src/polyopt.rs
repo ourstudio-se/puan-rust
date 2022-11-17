@@ -13,15 +13,22 @@ use crate::linalg;
 /// given by `bounds`. `Indices` represents the global indices of the variables. Note that the length of `coeffs`, `bounds` and `indices` must be the same.
 #[derive(Hash)]
 pub struct GeLineq {
+    /// `id` may be used as a reference for later purposes
+    pub id      : Option<u32>,
+    /// Coefficients of the linear inequality
     pub coeffs  : Vec<i64>,
+    /// Bounds for every variable
     pub bounds  : Vec<(i64, i64)>,
+    /// `d` in a linear inequality $ ax+by+cz+d >= 0 $
     pub bias    : i64,
+    /// Id of each index
     pub indices : Vec<u32>
 }
 
 impl Clone for GeLineq {
     fn clone(&self) -> Self {
         return GeLineq {
+            id: self.id,
             coeffs: self.coeffs.to_vec(),
             bounds: self.bounds.to_vec(),
             bias: self.bias,
@@ -67,18 +74,21 @@ impl GeLineq {
     /// ```
     /// use puanrs::polyopt::GeLineq;
     /// let ge_lineq1:GeLineq = GeLineq {
+    ///    id      : None,
     ///    coeffs  : vec![1, 1],
     ///    bounds  : vec![(0, 1), (0, 1)],
     ///    bias    : -1,
     ///    indices : vec![1, 2]
     ///    };
     /// let ge_lineq2: GeLineq = GeLineq {
+    ///    id      : None,
     ///    coeffs  : vec![1, 1],
     ///    bounds  : vec![(0, 1), (0, 1)],
     ///    bias    : -1,
     ///    indices : vec![3, 4]
     ///  };
     /// let expected: GeLineq = GeLineq {
+    ///    id      : None,
     ///    coeffs  : vec![1, 1, 1, 1],
     ///    bounds  : vec![(0, 1), (0, 1), (0, 1), (0, 1)],
     ///    bias    : -1,
@@ -135,6 +145,7 @@ impl GeLineq {
             }
             return Some(
                 GeLineq {
+                    id: None,
                     coeffs: new_coeffs,
                     bounds: new_bounds,
                     bias: ge_lineq1._eqmin()*(ge_lineq2._eqmin() + ge_lineq2.bias)+ge_lineq2.bias,
@@ -197,6 +208,7 @@ impl GeLineq {
             }
             return Some(
                 GeLineq {
+                    id: None,
                     coeffs: new_coeffs,
                     bounds: new_bounds,
                     bias: ge_lineq1.bias*(cmp::max(ge_lineq2._eqmax().abs(), ge_lineq2._eqmin().abs())+1) + ge_lineq2.bias - cmp::max(ge_lineq2._eqmin() + ge_lineq2.bias, 0),
@@ -220,12 +232,14 @@ impl GeLineq {
     /// ```
     /// use puanrs::polyopt::GeLineq;
     /// let main_gelineq:GeLineq = GeLineq {
+    ///    id      : None,
     ///    coeffs  : vec![1, 1],
     ///    bounds  : vec![(0, 1), (0, 1)],
     ///    bias    : -2,
     ///    indices : vec![1, 2]
     /// };
     /// let sub_gelineq: GeLineq = GeLineq {
+    ///    id      : None,
     ///    coeffs  : vec![1, 1],
     ///    bounds  : vec![(0, 1), (0, 1)],
     ///    bias    : -1,
@@ -244,12 +258,13 @@ impl GeLineq {
             let new_sub_coeffs: Vec<i64> = sub_gelineq.coeffs.iter().map(|x| -1*x).collect();
             let new_sub_bias = -sub_gelineq.bias - 1;
             let new_sub_gelineq = GeLineq {
+                id: None,
                 coeffs: new_sub_coeffs,
                 bounds: sub_gelineq.bounds.to_vec(),
                 bias: new_sub_bias,
                 indices: sub_gelineq.indices.to_vec()
             };
-                return GeLineq::_substitution(main_gelineq, var_to_substitute, &new_sub_gelineq);
+            return GeLineq::_substitution(main_gelineq, var_to_substitute, &new_sub_gelineq);
         }
         return GeLineq::_substitution(main_gelineq, var_to_substitute, sub_gelineq);
     }
@@ -322,6 +337,7 @@ impl GeLineq {
         let new_bias = if sub_gelineq.bias < 0 {(main_gelineq.bias + adjuster)*sub_gelineq._eqmax() + sub_gelineq.bias} else {(main_gelineq.bias+adjuster)*sub_gelineq._eqmin().abs() + sub_gelineq.bias};
         return Some(
             GeLineq {
+                id: main_gelineq.id,
                 coeffs: new_coeffs,
                 bounds: new_bounds,
                 bias: new_bias,
@@ -364,6 +380,7 @@ impl GeLineq {
     /// ```
     /// use puanrs::polyopt::GeLineq;
     /// let gelineq: GeLineq = GeLineq {
+    ///     id      : None,
     ///     coeffs  : vec![2, 1, 1],
     ///     bounds  : vec![(0,1), (0,1), (0,1)],
     ///     bias    : -1,
@@ -385,11 +402,15 @@ impl GeLineq {
                 new_coeffs.push(0);
             }
         }
-        return Some(GeLineq {
-            coeffs: new_coeffs,
-            bounds: gelineq.bounds.to_vec(),
-            bias: gelineq.bias, 
-            indices: gelineq.indices.to_vec() })
+        return Some(
+                GeLineq {
+                    id: gelineq.id,
+                    coeffs: new_coeffs,
+                    bounds: gelineq.bounds.to_vec(),
+                    bias: gelineq.bias, 
+                    indices: gelineq.indices.to_vec() 
+                }
+            )
         }
         
         
@@ -462,6 +483,7 @@ impl Variable {
     /// ```
     pub fn to_lineq_neg(&self) -> GeLineq {
         return GeLineq {
+            id: Some(self.id),
             coeffs: vec![-1],
             bias: 0,
             bounds: vec![(0,1)],
@@ -484,11 +506,13 @@ pub struct Polyhedron {
     /// The right-hand side of linear constraints as described above.
     pub b: Vec<f64>,
     /// Upper and lower bounds (`lower_bound`, `upper_bound`) of the variables given by `a`.
-    pub variables: Vec<VariableFloat>
+    pub variables: Vec<VariableFloat>,
+    // Index of rows in `a`.
+    pub index: Vec<Option<u32>>
 }
 impl Clone for Polyhedron {
     fn clone(&self) -> Self {
-        return Polyhedron { a: self.a.clone(), b: self.b.clone(), variables: self.variables.clone() }
+        return Polyhedron { a: self.a.clone(), b: self.b.clone(), variables: self.variables.clone(), index: self.index.clone() }
     }
 }
 impl PartialEq for Polyhedron {
