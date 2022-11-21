@@ -141,7 +141,7 @@ fn convert_lp_to_standard_form(lp: &LinearProgram) -> StandardFormLP {
     // Introduce slack-variables
     for i in 0..new_a.nrows {
         let mut tmp = vec![0.0; new_a.nrows];
-        if new_b[i] < 0.0 {
+        if new_b[i] <= 0.0 {
             tmp[i] = 1.0;
             for j in 0..new_a.ncols{
                 new_a.val[i*new_a.ncols+j] = -new_a.val[i*new_a.ncols+j];
@@ -943,5 +943,27 @@ mod tests {
         let sol = lp.solve();
         assert_eq!(sol.z, 3);
         assert_eq!(sol.x, vec![1, 1, 1]);
+    }
+    #[test]
+    fn test_solver_19(){
+        let lp: IntegerLinearProgram = IntegerLinearProgram{
+            ge_ph: Polyhedron { a: Matrix { val: vec![ 1.,  1.,  0.,  0.,  0.,  0., 0., -2.,  0.,  0.,  1.,  1., -1.,  0., -1., -1.,  0.,  0.],
+                                nrows: 3, ncols: 6},
+                                b: vec![1.0, 0.0, -2.0],
+                                variables: vec![
+                                    VariableFloat{id: 0, bounds:(0.0, 1.0)},
+                                    VariableFloat{id: 0, bounds:(0.0, 1.0)},
+                                    VariableFloat{id: 0, bounds:(0.0, 1.0)},
+                                    VariableFloat{id: 0, bounds:(0.0, 1.0)},
+                                    VariableFloat{id: 0, bounds:(0.0, 1.0)},
+                                    VariableFloat{id: 0, bounds:(0.0, 1.0)}],
+                                index: (0..5).map(|x| Some(x as u32)).collect(),
+                },
+                eq_ph: Default::default(),
+                of: vec![0.0, 1.0, 1.0, 1.0, 0.0, 0.0]
+        };
+        let sol = lp.solve();
+        assert_eq!(sol.z, 3);
+        assert_eq!(sol.x, vec![0, 1, 1, 1, 1, 1]);
     }
 }
