@@ -29,7 +29,7 @@ impl Sign {
 
 /// Data structure for representing an `at least` constraint on form 
 /// $$ c * v_0 + c * v_1 + ... + c * v_n + bias \ge 0 $$
-/// where $c \in [-1,1]$ depending on positive or negative bias.
+/// where $c=1$ if `sign` is `Sign::Positive` or $c=-1$ if `sign` is `Sign::Negative`.
 /// `ids` vector property holds what variables are connected to this constraint.
 pub struct AtLeast {
     pub ids     : Vec<u32>,
