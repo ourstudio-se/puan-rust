@@ -18,6 +18,10 @@ pub enum Sign {
 }
 
 impl Sign {
+
+    /// Value representation of the various Sign choices.
+    /// `Sign::Positive` is represented by `1`. 
+    /// `Sign::Negative` is represented by `-1`. 
     pub fn val(&self) -> i8 {
         return match *self {
             Sign::Positive => 1,
@@ -29,7 +33,7 @@ impl Sign {
 
 /// Data structure for representing an `at least` constraint on form 
 /// $$ c * v_0 + c * v_1 + ... + c * v_n + bias \ge 0 $$
-/// where $c=1$ if `sign` is `Sign::Positive` or $c=-1$ if `sign` is `Sign::Negative`.
+/// where $c=1$ if `sign == Sign::Positive`, or, $c=-1$ if `sign == Sign::Negative`.
 /// `ids` vector property holds what variables are connected to this constraint.
 pub struct AtLeast {
     pub ids     : Vec<u32>,
