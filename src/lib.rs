@@ -11,6 +11,21 @@ pub mod solver;
 pub mod linalg;
 pub mod polyopt;
 
+#[derive(Clone, Copy)]
+pub enum Sign {
+    Positive,
+    Negative
+}
+
+impl Sign {
+    pub fn val(&self) -> i8 {
+        return match *self {
+            Sign::Positive => 1,
+            Sign::Negative => -1,
+        }
+    }
+}
+
 
 /// Data structure for representing an `at least` constraint on form 
 /// $$ c * v_0 + c * v_1 + ... + c * v_n + bias \ge 0 $$
@@ -18,7 +33,8 @@ pub mod polyopt;
 /// `ids` vector property holds what variables are connected to this constraint.
 pub struct AtLeast {
     pub ids     : Vec<u32>,
-    pub bias   : i64,
+    pub bias    : i64,
+    pub sign    : Sign,
 }
 
 impl Clone for AtLeast {
@@ -26,6 +42,7 @@ impl Clone for AtLeast {
         return AtLeast {
             bias: self.bias,
             ids: self.ids.to_vec(),
+            sign: self.sign,
         }
     }
 }
@@ -43,12 +60,14 @@ impl AtLeast {
     /// 
     /// ```
     /// use puanrs::AtLeast;
+    /// use puanrs::Sign;
     /// use puanrs::polyopt::GeLineq;
     /// use puanrs::polyopt::Variable;
     /// use std::{collections::HashMap};
     /// let at_least: AtLeast = AtLeast {
     ///     ids     : vec![0,1,2],
-    ///     bias   : -1,
+    ///     bias    : -1,
+    ///     sign    : Sign::Positive,
     /// };
     /// let mut variable_hm: HashMap<u32, Variable> = HashMap::default();
     /// variable_hm.insert(0, Variable {id: 0, bounds: (0,1)});
@@ -63,7 +82,7 @@ impl AtLeast {
     pub fn to_lineq(&self, id: Option<u32>, variable_hm: &HashMap<u32, Variable>) -> GeLineq {
         return GeLineq {
             id: id,
-            coeffs: vec![match self.bias >= 0 {true => -1, false => 1}; self.size()],
+            coeffs: vec![self.sign.val() as i64; self.size()],
             bias: self.bias,
             bounds: self.ids.iter().map(
                 |id| {
@@ -250,6 +269,7 @@ impl Theory {
     /// ```
     /// use puanrs::Theory;
     /// use puanrs::Statement;
+    /// use puanrs::Sign;
     /// use puanrs::AtLeast;
     /// use puanrs::polyopt::Variable;
     /// use puanrs::polyopt::GeLineq;
@@ -264,7 +284,8 @@ impl Theory {
     ///             expression  : Some(
     ///                 AtLeast {
     ///                     ids     : vec![1,2],
-    ///                     bias   : -1,
+    ///                     bias    : -1,
+    ///                     sign    : Sign::Positive
     ///                 }
     ///             )
     ///         },
@@ -392,6 +413,7 @@ impl Theory {
     /// ```
     /// use puanrs::Theory;
     /// use puanrs::Statement;
+    /// use puanrs::Sign;
     /// use puanrs::AtLeast;
     /// use puanrs::polyopt::Variable;
     /// let t = Theory {
@@ -402,7 +424,8 @@ impl Theory {
     ///            expression: Some(
     ///                AtLeast {
     ///                    ids: vec![1,2],
-    ///                    bias: -1
+    ///                    bias: -1,
+    ///                    sign: Sign::Positive
     ///                }
     ///            )
     ///        },
@@ -411,7 +434,8 @@ impl Theory {
     ///            expression: Some(
     ///                AtLeast {
     ///                    ids: vec![3,4],
-    ///                    bias: 1
+    ///                    bias: 1,
+    ///                    sign: Sign::Negative
     ///                }
     ///            )
     ///        },
@@ -420,7 +444,8 @@ impl Theory {
     ///            expression: Some(
     ///                AtLeast {
     ///                    ids: vec![5,6,7],
-    ///                    bias: -3
+    ///                    bias: -3,
+    ///                    sign: Sign::Positive,
     ///                }
     ///            )
     ///        },
@@ -559,7 +584,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -568,7 +594,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: -6
+                            bias: -6,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -577,7 +604,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6],
-                            bias: -4
+                            bias: -4,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -628,7 +656,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2,3],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -637,7 +666,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![4,5],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -646,7 +676,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -655,7 +686,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![7,8],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -664,7 +696,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![9,10],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -673,7 +706,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![11],
-                            bias: 0
+                            bias: 0,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -682,7 +716,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![12,13],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -733,7 +768,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -742,7 +778,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: 1
+                            bias: 1,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -751,7 +788,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -794,7 +832,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -803,7 +842,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: 0
+                            bias: 0,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -812,7 +852,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -866,7 +907,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -875,7 +917,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -884,7 +927,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -893,7 +937,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![7,8],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -902,7 +947,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![9,10],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -911,7 +957,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![11],
-                            bias: 0
+                            bias: 0,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -920,7 +967,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![12,13],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1776,7 +1824,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1785,7 +1834,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: 1
+                            bias: 1,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -1794,7 +1844,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1814,7 +1865,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1823,7 +1875,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![2],
-                            bias: 1
+                            bias: 1,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -1832,7 +1885,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![0],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1855,7 +1909,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![2],
-                            bias: 1
+                            bias: 1,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -1864,7 +1919,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1883,7 +1939,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1892,7 +1949,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: 1
+                            bias: 1,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -1901,7 +1959,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1943,7 +2002,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -1994,7 +2054,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2003,7 +2064,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: 1
+                            bias: 1,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -2012,7 +2074,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2193,7 +2256,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2202,7 +2266,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: -6
+                            bias: -6,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2211,7 +2276,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6],
-                            bias: -4
+                            bias: -4,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2290,7 +2356,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2,3],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2299,7 +2366,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![4,5],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2308,7 +2376,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2317,7 +2386,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![7,8],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2326,7 +2396,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![9,10],
-                            bias: -2
+                            bias: -2,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2335,7 +2406,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![11],
-                            bias: 0
+                            bias: 0,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -2344,7 +2416,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![12,13],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2418,7 +2491,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2427,7 +2501,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: 1
+                            bias: 1,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -2436,7 +2511,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2492,7 +2568,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![1,2],
-                            bias: -1
+                            bias: -1,
+                            sign: Sign::Positive,
                         }
                     )
                 },
@@ -2501,7 +2578,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![3,4],
-                            bias: 1
+                            bias: 1,
+                            sign: Sign::Negative,
                         }
                     )
                 },
@@ -2510,7 +2588,8 @@ mod tests {
                     expression: Some(
                         AtLeast {
                             ids: vec![5,6,7],
-                            bias: -3
+                            bias: -3,
+                            sign: Sign::Positive,
                         }
                     )
                 },
