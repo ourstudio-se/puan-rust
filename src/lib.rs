@@ -329,7 +329,7 @@ impl Theory {
     /// Converts Theory into a polyhedron. Set `active` param to true
     /// to activate polyhedron, meaning assuming the top node to be true. 
     /// Set `reduced` to true to potentially retrieve a reduced polyhedron.
-    pub fn to_polyhedron(&self, active: bool, reduced: bool) -> Polyhedron {
+    pub fn to_ge_polyhedron(&self, active: bool, reduced: bool) -> Polyhedron {
         let lineqs = self.to_lineqs(active, reduced);
         let mut index_bound_vec: Vec<(u32, (i64,i64))> = Vec::default();
         for lineq in lineqs.iter() {
@@ -457,7 +457,7 @@ impl Theory {
     /// ];
     /// assert_eq!(actual_solutions[0].x, expected_solutions[0]);
     pub fn solve(&self, objectives: Vec<HashMap<u32, f64>>, reduce_polyhedron: bool) -> Vec<solver::IntegerSolution> {
-        let polyhedron: Polyhedron = self.to_polyhedron(true,reduce_polyhedron);
+        let polyhedron: Polyhedron = self.to_ge_polyhedron(true,reduce_polyhedron);
         let _objectives: Vec<Vec<f64>> = objectives.iter().map(|x| {
             let mut vector = vec![0.0; polyhedron.variables.len()];
             for (k, v) in x.iter() {
@@ -2141,7 +2141,7 @@ mod tests {
     }
 
     #[test]
-    fn test_theory_to_polyhedron() {
+    fn test_theory_to_ge_polyhedron() {
 
         fn validate(actual: Polyhedron, expected: Polyhedron) -> bool {
             if actual.variables != expected.variables {
@@ -2261,7 +2261,7 @@ mod tests {
             ],
             index: (0..1).map(|x| Some(x as u32)).collect(),
         };
-        assert!(validate(t.to_polyhedron(true, true), expected));
+        assert!(validate(t.to_ge_polyhedron(true, true), expected));
 
         // Depth 4
         // 0: 1 & 2 & 3
@@ -2401,7 +2401,7 @@ mod tests {
             index: (0..4).map(|x| Some(x as u32)).collect(),
             // variable_ids: vec![1, 2, 3, 7, 8, 9, 10, 11, 12, 13] 
         };
-        assert!(validate(t.to_polyhedron(true, true), expected));
+        assert!(validate(t.to_ge_polyhedron(true, true), expected));
 
         // Depth 3
         // 0: 1 -> 2
@@ -2479,7 +2479,7 @@ mod tests {
             ],
             index: (0..1).map(|x| Some(x as u32)).collect(),
         };
-        assert!(validate(t.to_polyhedron(true, true), expected));
+        assert!(validate(t.to_ge_polyhedron(true, true), expected));
     }
 
     #[test]
