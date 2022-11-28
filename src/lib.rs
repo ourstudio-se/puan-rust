@@ -412,6 +412,9 @@ impl Theory {
     /// * Ids given in objectives which are not in Theory will be ignored.
     /// * Ids which have not been given a value will be given 0 as default.
     /// 
+    /// # Returns
+    /// A tuple of (solution: HashMap<u32, i64>, objective value: i64, status code: usize)
+    /// 
     /// # Example:
     /// 
     /// ```
@@ -482,10 +485,10 @@ impl Theory {
     ///     true
     /// );
     /// let expected_solutions = vec![
-    ///    vec![1,1,1,1,1], // <- notice that these are from reduced columns (3,4,5,6,7)
+    ///    vec![(3,1),(4,1),(5,1),(6,1),(7,1)].iter().cloned().collect(), // <- notice that these are from reduced columns (3,4,5,6,7)
     /// ];
-    /// assert_eq!(actual_solutions[0].x, expected_solutions[0]);
-    pub fn solve(&self, objectives: Vec<HashMap<u32, f64>>, reduce_polyhedron: bool) -> Vec<solver::IntegerSolution> {
+    /// assert_eq!(actual_solutions[0].0, expected_solutions[0]);
+    pub fn solve(&self, objectives: Vec<HashMap<u32, f64>>, reduce_polyhedron: bool) -> Vec<(HashMap<u32, i64>, i64, usize)> {
         let polyhedron: Polyhedron = self.to_ge_polyhedron(true,reduce_polyhedron);
         let _objectives: Vec<Vec<f64>> = objectives.iter().map(|x| {
             let mut vector = vec![0.0; polyhedron.variables.len()];
@@ -504,6 +507,12 @@ impl Theory {
                 of: objective.to_vec(),
             };
             return ilp.solve();
+        }).map(|sol| {
+            (
+                polyhedron.variables.clone().iter().map(|x| x.id).zip(sol.x).collect(),
+                sol.z,
+                sol.status_code,
+            )
         }).collect();
     }
 }
@@ -2626,10 +2635,9 @@ mod tests {
                 // vec![3.0, 1.0,-1.0,-1.0, 1.0],
             ], true);
         let expected_solutions = vec![
-            vec![1,1,1,1,1],
-            vec![1,0,0,0,0],
-            // vec![1,0,0,0,1],
+            vec![(3,1),(4,1),(5,1),(6,1),(7,1)].iter().cloned().collect(),
+            vec![(3,1),(4,0),(5,0),(6,0),(7,0)].iter().cloned().collect(),
         ];
-        assert!(actual_solutions.iter().zip(expected_solutions).all(|(x,y)| x.x == y));
+        assert!(actual_solutions.iter().zip(expected_solutions).all(|(x,y)| x.0 == y));
     }
 }
