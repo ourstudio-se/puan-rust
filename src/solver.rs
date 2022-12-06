@@ -478,7 +478,10 @@ fn revised_simplex(lp: &StandardFormLP, bfs: &BFS) -> (StandardFormLP, BFS) {
     let mut b_vars = bfs.b_vars.clone();
     let mut n_vars = bfs.n_vars.clone();
     let mut c_new = lp.of.clone();
-    let mut sub_vars = bfs.sub_vars.clone(); 
+    let mut sub_vars = bfs.sub_vars.clone();
+    for i in 0..sub_vars.len(){
+        c_new[sub_vars[i]] = -c_new[sub_vars[i]];
+    }
     let mut x_b = Matrix{val: bfs.x.clone(), ncols: 1, nrows: b_vars.len()};
     let mut b_inv = linalg::identity_matrix(b_vars.len());
     let mut c_tilde_n: Vec<f64> = Vec::with_capacity(n_vars.len());
@@ -536,7 +539,7 @@ fn revised_simplex(lp: &StandardFormLP, bfs: &BFS) -> (StandardFormLP, BFS) {
         x_b = b_inv.dot(&Matrix{val: b.to_vec(), ncols: 1, nrows: b.len()});
     }
     
-    let a_new = b_inv.dot(&lp.eq_ph.a);
+    let a_new = b_inv.dot(&a);
     
     return (StandardFormLP{ eq_ph: Polyhedron {a: a_new, b: x_b.val.to_vec(), variables: lp.eq_ph.variables.clone(), index: lp.eq_ph.index.clone()}, of: lp.of.clone()},
             BFS { x: x_b.val, b_vars, n_vars, sub_vars})
@@ -965,5 +968,28 @@ mod tests {
         let sol = lp.solve();
         assert_eq!(sol.z, 3);
         assert_eq!(sol.x, vec![0, 1, 1, 1, 1, 1]);
+    }
+    #[test]
+    fn test_solver_20(){
+        let solution: IntegerSolution = IntegerLinearProgram {
+            ge_ph: Polyhedron {
+                a: Matrix { 
+                    val: vec![1.0, 1.0], 
+                    ncols: 2, 
+                    nrows: 1 
+                },
+                b: vec![2.0],
+                index: vec![Some(0)],
+                variables: vec![
+                    VariableFloat { id: 1, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 2, bounds: (0.0, 1.0) },
+                ]
+            },
+            eq_ph: Default::default(),
+            of: vec![1.0, 0.0]
+        }.solve();
+        assert_eq!(solution.x, vec![1,1]);
+        assert_eq!(solution.z, 1);
+        assert_eq!(solution.status_code, 5);
     }
 }
