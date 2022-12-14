@@ -577,7 +577,7 @@ impl Matrix {
 /// A group is defined by **consecutive** numbers sharing the same value.
 /// 
 /// # Example:
-/// [3, 3, 2, 3] converst to [1, 1, 3, 6]
+/// [3, 3, 2, 3] converts to [1, 1, 3, 6]
 /// 
 /// The first group consisting of two 3s gets the smallest value 1. The second group, consisting of one 2,
 /// gets the smallest value shadowing the first group, i.e. $2\cdot1 + 1 = 3$. The last group, consisting of one 3, gets the smallest
