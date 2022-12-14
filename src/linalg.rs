@@ -572,6 +572,34 @@ impl Matrix {
     }
 }
 
+/// Function converting a vector of groups into the smallest number for each group shadowing all previous numbers.
+/// 
+/// A group is defined by **consecutive** numbers sharing the same value.
+/// 
+/// # Example:
+/// [3, 3, 2, 3] converst to [1, 1, 3, 6]
+/// 
+/// The first group consisting of two 3s gets the smallest value 1. The second group, consisting of one 2,
+/// gets the smallest value shadowing the first group, i.e. $2\cdot1 + 1 = 3$. The last group, consisting of one 3, gets the smallest
+/// value shadowing all the previous groups, i.e. $2\cdot1 + 1\cdot3 + 1 = 6$.  
+pub fn optimized_bit_allocation_64(v: &Vec<i64>) -> Vec<i64>{
+    let mut res: Vec<i64> = Vec::with_capacity(v.len());
+    let mut grp_size= 0;
+    let mut val_adj = 1;
+    let mut current_val = v[0];
+    for i in 0..v.len(){
+        if v[i] == current_val {
+            grp_size += 1;
+        } else {
+            current_val = v[i];
+            val_adj = val_adj*grp_size + val_adj;
+            grp_size = 1;
+        }
+        res.push(val_adj);
+    }
+    res
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,7 +616,13 @@ mod tests {
             nrows: 2,
         };
         assert_eq!(m1.dot(&m2).val, Matrix{val: vec![25.0, 28.0, 57.0, 64.0, 89.0, 100.0], ncols: 2, nrows: 3}.val);
-
+    }
+    #[test]
+    fn test_optimized_bit_allocation(){
+        assert_eq!(optimized_bit_allocation_64(&vec![1,2,3,4]), vec![1,2,4,8]);
+        assert_eq!(optimized_bit_allocation_64(&vec![1,1,1,2]), vec![1,1,1,4]);
+        assert_eq!(optimized_bit_allocation_64(&vec![2,1,1,1,2]), vec![1,2,2,2,8]);
+        assert_eq!(optimized_bit_allocation_64(&vec![3, 3, 2, 3]), vec![1,1,3,6])
     }
 
 }
