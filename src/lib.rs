@@ -516,8 +516,10 @@ impl Theory {
         }).collect();
     }
 
-    /// Creates an 'width'-ary Theory/tree, with node size width**0 + width**1 + ... + width**depth.
-    /// Each Statement with Some expression has bias -1 and `width` number of children.
+    /// Given two positive integers `n` (width) and `m` (depth), this function creates a n-ary Theory/tree, with variable 
+    /// size $ n^0 + n^1 + ... + n^m $. Each Statement with Some expression has bias -1 and `n` number of children.
+    /// For eaxmple, `Theory::instance(2, 3, String::from("my-id"))` would create a binary tree/Theory of variable size $ 2^3 = 8 $.
+    /// # Note
     /// This function was mainly created to support benchmarking tests for different Theory sizes.
     pub fn instance(width: u32, depth: u32, id: String) -> Theory {
         
