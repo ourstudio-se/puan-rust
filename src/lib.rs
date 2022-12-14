@@ -524,7 +524,7 @@ impl Theory {
         let n: u32 = (0..depth).into_iter().map(|i| width.pow(i as u32)).sum();
         let n_before_leafs: u32 = n - width.pow(depth-1);
         return Theory {
-            id: id,
+            id,
             statements: (0..n).into_iter().map(|i| {
                 let start_index = i*width+1;
                 match i < n_before_leafs {
