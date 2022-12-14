@@ -16,3 +16,10 @@ itertools = "0.10.4"
 
 [build]
 rustdocflags = [ "--html-in-header", "./src/docs-header.html" ]
+
+[dev-dependencies]
+criterion = "0.4"
+
+[[bench]]
+name = "puan_benchmark"
+harness = false

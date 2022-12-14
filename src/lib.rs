@@ -515,13 +515,53 @@ impl Theory {
             )
         }).collect();
     }
+
+    /// Given two positive integers `n` (width) and `m` (depth), this function creates a n-ary Theory/tree, with variable 
+    /// size $ n^0 + n^1 + ... + n^m $. Each Statement with Some expression has bias -1 and `n` number of children.
+    /// For eaxmple, `Theory::instance(2, 3, String::from("my-id"))` would create a binary tree/Theory of variable size $ 2^3 = 8 $.
+    /// # Note
+    /// This function was mainly created to support benchmarking tests for different Theory sizes.
+    pub fn instance(width: u32, depth: u32, id: String) -> Theory {
+        
+        let n: u32 = (0..depth).into_iter().map(|i| width.pow(i as u32)).sum();
+        let n_before_leafs: u32 = n - width.pow(depth-1);
+        return Theory {
+            id,
+            statements: (0..n).into_iter().map(|i| {
+                let start_index = i*width+1;
+                match i < n_before_leafs {
+                    true => Statement {
+                        variable: Variable {
+                            id: i,
+                            bounds: (0,1)
+                        },
+                        expression: Some(
+                            AtLeast {
+                                bias: -1,
+                                ids: (start_index..start_index+width).collect_vec(),
+                                sign: Sign::Positive,
+                            }
+                        )
+                    },
+                    false => Statement {
+                        variable: Variable {
+                            id: i,
+                            bounds: (0,1)
+                        },
+                        expression: None
+                    }
+                }
+            }).collect(), 
+        };
+    }
+
 }
 
 #[cfg(test)]
 mod tests {
     use std::vec;
 
-    use crate::{linalg::Matrix, polyopt::VariableFloat};
+    use crate::{linalg::Matrix, polyopt::VariableFloat, solver::IntegerLinearProgram};
 
     use super::*;
 
@@ -540,6 +580,15 @@ mod tests {
                 }
             }
             return res + self.bias >= 0;
+        }
+    }
+
+    #[test]
+    fn test_generate_instance_to_polyhedron() {
+        for (w,d) in [(2,2),(2,3),(2,4),(3,3),(3,4),(4,4)] {
+            let theory: Theory = Theory::instance(w, d, String::from("my-id"));
+            let polyhedron: Polyhedron = theory.to_ge_polyhedron(true, false);
+            assert_eq!(polyhedron.variables.len(), theory.statements.len()-1);
         }
     }
 
