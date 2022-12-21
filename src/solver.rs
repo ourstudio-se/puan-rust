@@ -178,7 +178,7 @@ fn _simplex_phase_one(lp: &StandardFormLP) -> (StandardFormLP, BFS) {
     let mut new_bounds = lp.eq_ph.bounds();
     let mut new_of = vec![0.0; lp.eq_ph.a.ncols];
     let updated_lp: StandardFormLP;
-    let new_bfs: BFS;
+    let mut new_bfs: BFS;
     let mut b_vars: Vec<usize> = Vec::with_capacity(lp.eq_ph.a.nrows);
     let mut n_vars: Vec<usize> = (0..lp.eq_ph.a.ncols - lp.eq_ph.a.nrows).collect();
     
@@ -209,8 +209,9 @@ fn _simplex_phase_one(lp: &StandardFormLP) -> (StandardFormLP, BFS) {
                                     b_vars, n_vars, sub_vars: Default::default()
                                 });
     }
+    new_bfs.x = new_bfs.x.iter().map(|x| if (x%1.0) < 0.00001 {x.floor()} else if x%1.0>0.99999 {x.ceil()} else {*x}).collect();
     let res = Matrix {val: new_bfs.x.clone(), nrows: 1, ncols: new_bfs.x.len()}.dot(&Matrix{val: new_of.clone(), ncols: new_of.len(), nrows: 1}.get_columns(&new_bfs.b_vars).transpose());
-    if res.val[0] < 0.0 {
+    if res.val[0] < 0.0 - 0.0000001 {
         // No feasible solution exists
         return (lp.clone(), Default::default());
     } else {
@@ -310,12 +311,12 @@ pub fn solve_ilp(lp: &IntegerLinearProgram) -> IntegerSolution {
         } else if current_sol.z < z_lb {
             // Not possible to find better solution in this area
            continue
-        } else if current_sol.x.iter().position(|x| (x%1.0) > 0.0000001).is_none() || current_sol.x.iter().position(|x| (x%1.0) > 0.0000001).unwrap() >= current_lp.ge_ph.a.ncols {
+        } else if current_sol.x.iter().position(|x| (x%1.0) > 0.0000001 && (x%1.0) < 0.9999999).is_none() || current_sol.x.iter().position(|x| (x%1.0) > 0.0000001 && (x%1.0) < 0.999999).unwrap() >= current_lp.ge_ph.a.ncols {
             // We've found a best solution in this area
             z_lb = current_sol.z;
             current_best_sol = current_sol;
         } else {
-            let first_non_int = current_sol.x.iter().position(|x| (x%1.0) > 0.0000001).unwrap();
+            let first_non_int = current_sol.x.iter().position(|x| (x%1.0) > 0.0000001 && (x%1.0) < 0.9999999).unwrap();
             
             let mut bounds1 = current_lp.ge_ph.bounds().to_vec();
             bounds1[first_non_int].1 = f64::floor(current_sol.x[first_non_int]);
@@ -991,5 +992,60 @@ mod tests {
         assert_eq!(solution.x, vec![1,1]);
         assert_eq!(solution.z, 1);
         assert_eq!(solution.status_code, 5);
+    }
+    #[test]
+    fn test_solver_21(){
+        let solution: IntegerSolution = IntegerLinearProgram { 
+            ge_ph: Polyhedron {
+                a: Matrix {
+                    val: vec![0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0.,
+                             -1.,-1.,-1.,-1.,-1.,-1.,-1.,-1.,-1.,-1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,-5., 0., 0., 0.,
+                              0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 1., 0., 0., 0., 0.,-6., 0., 1., 1., 0., 1., 1., 0.,
+                              0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0.,-1., 0.,
+                              0.,-1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 0., 0.,
+                              0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0.,-1., 0., 0.,
+                              0., 0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 0., 0., 0., 0.,
+                              0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0.,-1., 0., 0., 0., 0.,
+                              0., 0., 0.,-1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
+                              0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 1.,
+                              0., 0., 0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,-1.,
+                              0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,-1., 0., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
+                              0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
+                              0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,-1., 0., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,
+                              0., 0.,-1., 0., 0., 0., 0., 0., 0., 0., 0., 0.,-1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
+                    ncols: 24,
+                    nrows: 15
+                },
+                b: vec![2.,-10., 0., 0.,-1., 0.,-1., 0.,-1., 0.,-1., 0.,-1., 0.,-1.],
+                index: vec![Some(0)],
+                variables: vec![
+                    VariableFloat { id: 1, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 2, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 3, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 4, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 5, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 6, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 7, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 8, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 9, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 10, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 11, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 12, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 13, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 14, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 15, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 16, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 17, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 18, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 19, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 20, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 21, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 22, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 23, bounds: (0.0, 1.0) },
+                    VariableFloat { id: 24, bounds: (0.0, 1.0) },
+                ]
+            }, eq_ph: Default::default(),
+            of: vec![10., 10., 10., 10., 10., 10., 10., 10., 10., 10., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.] }.solve();
+            assert_eq!(solution.x, vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1])
     }
 }
