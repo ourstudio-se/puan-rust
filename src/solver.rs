@@ -3,6 +3,8 @@
 //! Beta version of simplex solver for linear and integer linear programs.
 //! 
 
+use std::char::MAX;
+
 use itertools::Itertools;
 use linalg::Matrix;
 use crate::polyopt::{Polyhedron, VariableFloat};
@@ -221,14 +223,28 @@ fn _simplex_phase_one(lp: &StandardFormLP) -> (StandardFormLP, BFS) {
         let mut a = updated_lp.eq_ph.a.clone();
         for index in 0..b_vars.len(){
             if b_vars[index] >= lp.eq_ph.a.ncols {
-                let incoming_variable = n_vars.iter().find_or_first(|x| **x < lp.eq_ph.a.ncols).unwrap();
-                let b_inv_n_j = b_inv.dot(&Matrix { val : a.val.iter().skip(*incoming_variable).step_by(a.ncols).copied().collect(), ncols: 1, nrows: a.nrows});
+                let incoming_variable_candidates: Vec<usize> = n_vars.iter().filter(|x| **x < lp.eq_ph.a.ncols).map(|x| *x).collect();
+                let mut b_inv_n_j: Matrix=Default::default();
+                let mut incoming_variable: usize=0;
+                let mut found_incoming_var: bool = false;
+                for i in 0..incoming_variable_candidates.len(){
+                    b_inv_n_j = b_inv.dot(&Matrix { val : a.val.iter().skip(incoming_variable_candidates[i]).step_by(a.ncols).copied().collect(), ncols: 1, nrows: a.nrows});
+                    if (b_inv_n_j.val)[index] != 0.0 {
+                        incoming_variable = incoming_variable_candidates[i];
+                        found_incoming_var = true;
+                        break;
+                    }
+                }
+                if !found_incoming_var{
+                    // No feasible solution exists
+                    return (lp.clone(), Default::default());
+                }
                 let mut e = linalg::identity_matrix(b_vars.len());
                 e.val = e.update_column(index, &Matrix{val: (b_inv_n_j.val).iter().map(|x| -x).collect(), nrows: b_inv_n_j.nrows, ncols: b_inv_n_j.ncols}.divide(&Matrix{val: vec![(b_inv_n_j.val)[index]], ncols: 1, nrows:1}).val).val;
                 e.val[index*e.ncols + index] = if b_inv_n_j.val[index] != 0. {1./b_inv_n_j.val[index]} else {f64::MAX};
                 b_inv = e.dot(&b_inv);
-                b_vars[index] = *incoming_variable;
-                n_vars = n_vars.iter().filter(|x| **x != *incoming_variable).map(|x| *x).collect();
+                b_vars[index] = incoming_variable;
+                n_vars = n_vars.iter().filter(|x| **x != incoming_variable).map(|x| *x).collect();
             }
         }
         a = b_inv.dot(&a);
@@ -1046,6 +1062,6 @@ mod tests {
                 ]
             }, eq_ph: Default::default(),
             of: vec![10., 10., 10., 10., 10., 10., 10., 10., 10., 10., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.] }.solve();
-            assert_eq!(solution.x, vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1])
+            assert_eq!(solution.x, vec![1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
     }
 }
