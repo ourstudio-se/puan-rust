@@ -6,7 +6,7 @@ use std::cmp;
 
 use linalg::Matrix;
 
-use crate::linalg;
+use crate::linalg::{self, CsrMatrix};
 
 /// Data structure for linear inequalities on the following form
 /// $$ c_0 * v_0 + c_1 * v_1 + ... + c_n * v_n + bias \ge 0 $$ for $ c \in $ `coeffs` and $ v $ are variables which can take on the values
@@ -517,7 +517,7 @@ impl Clone for Polyhedron {
 }
 impl PartialEq for Polyhedron {
     fn eq(&self, other: &Self) -> bool {
-        return (self.a == other.a) & (self.b == other.b) & (self.variables == other.variables);
+        return (self.a == other.a) & (self.b == other.b) & (self.variables == other.variables) & (self.index == other.index);
     }
 }
 impl Polyhedron {
@@ -529,5 +529,47 @@ impl Polyhedron {
     /// Returns a Vec of all variable ID's generated from variables vector.
     pub fn ids(&self) -> Vec<u32> {
         return self.variables.iter().map(|x| x.id).collect();
+    }
+}
+
+pub struct CsrPolyhedron {
+    /// The left-hand side of linear constraints on the form $ a + b + c \ge x $ as a compressed sparse matrix.
+    pub a: CsrMatrix,
+    /// The right-hand side of linear constraints as described above.
+    pub b: Vec<f64>,
+    /// Upper and lower bounds (`lower_bound`, `upper_bound`) of the variables given by `a`.
+    pub variables: Vec<VariableFloat>,
+    // Index of rows in `a`.
+    pub index: Vec<Option<u32>>
+} 
+
+impl Clone for CsrPolyhedron {
+    fn clone(&self) -> Self {
+        return CsrPolyhedron { a: self.a.clone(), b: self.b.clone(), variables: self.variables.clone(), index: self.index.clone() }
+    }
+}
+impl PartialEq for CsrPolyhedron {
+    fn eq(&self, other: &Self) -> bool {
+        return (self.a == other.a) & (self.b == other.b) & (self.variables == other.variables) & (self.index == other.index);
+    }
+}
+impl CsrPolyhedron {
+    /// Returns a Vec of all variable bounds generated from variables vector.
+    pub fn bounds(&self) -> Vec<(f64, f64)> {
+        return self.variables.iter().map(|x| x.bounds).collect();
+    }
+
+    /// Returns a Vec of all variable ID's generated from variables vector.
+    pub fn ids(&self) -> Vec<u32> {
+        return self.variables.iter().map(|x| x.id).collect();
+    }
+
+    pub fn to_dense_polyhedron(&self) -> Polyhedron {
+        return Polyhedron {
+            a: self.a.to_matrix(),
+            b: self.b.clone(),
+            index: self.index.clone(),
+            variables: self.variables.clone()
+        }
     }
 }

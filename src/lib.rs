@@ -5,7 +5,7 @@
 use std::{collections::HashMap};
 use std::fmt::Display;
 use itertools::Itertools;
-use polyopt::{GeLineq, Variable, Polyhedron};
+use polyopt::{GeLineq, Variable, Polyhedron, CsrPolyhedron};
 
 pub mod solver;
 pub mod linalg;
@@ -354,7 +354,7 @@ impl Theory {
     /// Converts Theory into a polyhedron. Set `active` param to true
     /// to activate polyhedron, meaning assuming the top node to be true. 
     /// Set `reduced` to true to potentially retrieve a reduced polyhedron.
-    pub fn to_ge_polyhedron(&self, active: bool, reduced: bool) -> Polyhedron {
+    pub fn to_ge_polyhedron(&self, active: bool, reduced: bool) -> CsrPolyhedron {
         let lineqs = self.to_lineqs(active, reduced);
         let mut index_bound_vec: Vec<(u32, (i64,i64))> = Vec::default();
         for lineq in lineqs.iter() {
@@ -366,21 +366,22 @@ impl Theory {
             }
         }
 
-        let actual_indices: Vec<u32> = index_bound_vec.iter().map(|x| x.0).sorted().collect();
-        let new_indices: Vec<u32> = (0..actual_indices.len()).into_iter().map(|x| x as u32).collect();
-        let indices_map: HashMap<u32, u32> = actual_indices.clone().into_iter().zip(new_indices).collect();
+        let size = lineqs.iter().map(|l| l.indices.len()).sum(); 
 
-        let n_rows = lineqs.len(); 
-        let n_cols = indices_map.len();
-
-        let mut val: Vec<f64> = vec![0.0; n_rows*n_cols];
-        for (i, lineq) in lineqs.iter().enumerate() {
-            for (j, cf) in lineq.indices.iter().map(|j| j).zip(lineq.coeffs.iter().map(|x| (*x) as f64)) {
-                let new_index: usize = indices_map[j] as usize;
-                val[i*n_cols + new_index] = cf;
+        let mut row: Vec<i64> = vec![0; size];
+        let mut col: Vec<i64> = vec![0; size];
+        let mut val: Vec<f64> = vec![0.0; size];
+        let mut i: usize = 0;
+        for (il, lineq) in lineqs.iter().enumerate() {
+            for (index, cf) in lineq.indices.iter().zip(lineq.coeffs.iter()) {
+                row[i] = il as i64;
+                col[i] = (*index) as i64;
+                val[i] = (*cf) as f64;
+                i += 1;
             }
         }
-
+        
+        let actual_indices: Vec<u32> = index_bound_vec.iter().map(|x| x.0).sorted().collect();
         let index_bound_hm : HashMap<u32, (i64, i64)> = index_bound_vec.clone().into_iter().collect();
         let variables: Vec<Variable> = actual_indices.iter().filter_map(|i| {
             if let Some(bounds) = index_bound_hm.get(i) {
@@ -393,11 +394,11 @@ impl Theory {
             }
             return None;
         }).collect();
-        return Polyhedron {
-            a: linalg::Matrix { 
+        return CsrPolyhedron {
+            a: linalg::CsrMatrix { 
                 val: val, 
-                ncols: n_cols, 
-                nrows: n_rows,
+                row: row,
+                col: col
             },
             b: lineqs.iter().map(|x| (-1*x.bias) as f64).collect(),
             variables: variables.iter().map(|x| x.to_variable_float()).collect(),
@@ -489,7 +490,7 @@ impl Theory {
     /// ];
     /// assert_eq!(actual_solutions[0].0, expected_solutions[0]);
     pub fn solve(&self, objectives: Vec<HashMap<u32, f64>>, reduce_polyhedron: bool) -> Vec<(HashMap<u32, i64>, i64, usize)> {
-        let polyhedron: Polyhedron = self.to_ge_polyhedron(true,reduce_polyhedron);
+        let polyhedron: Polyhedron = self.to_ge_polyhedron(true,reduce_polyhedron).to_dense_polyhedron();
         let _objectives: Vec<Vec<f64>> = objectives.iter().map(|x| {
             let mut vector = vec![0.0; polyhedron.variables.len()];
             for (k, v) in x.iter() {
@@ -561,7 +562,7 @@ impl Theory {
 mod tests {
     use std::vec;
 
-    use crate::{linalg::Matrix, polyopt::VariableFloat, solver::IntegerLinearProgram};
+    use crate::{linalg::Matrix, polyopt::VariableFloat};
 
     use super::*;
 
@@ -587,7 +588,7 @@ mod tests {
     fn test_generate_instance_to_polyhedron() {
         for (w,d) in [(2,2),(2,3),(2,4),(3,3),(3,4),(4,4)] {
             let theory: Theory = Theory::instance(w, d, String::from("my-id"));
-            let polyhedron: Polyhedron = theory.to_ge_polyhedron(true, false);
+            let polyhedron: Polyhedron = theory.to_ge_polyhedron(true, false).to_dense_polyhedron();
             assert_eq!(polyhedron.variables.len(), theory.statements.len()-1);
         }
     }
@@ -2389,7 +2390,7 @@ mod tests {
             ],
             index: (0..1).map(|x| Some(x as u32)).collect(),
         };
-        assert!(validate(t.to_ge_polyhedron(true, true), expected));
+        assert!(validate(t.to_ge_polyhedron(true, true).to_dense_polyhedron(), expected));
 
         // Depth 4
         // 0: 1 & 2 & 3
@@ -2536,7 +2537,7 @@ mod tests {
             index: (0..4).map(|x| Some(x as u32)).collect(),
             // variable_ids: vec![1, 2, 3, 7, 8, 9, 10, 11, 12, 13] 
         };
-        assert!(validate(t.to_ge_polyhedron(true, true), expected));
+        assert!(validate(t.to_ge_polyhedron(true, true).to_dense_polyhedron(), expected));
 
         // Depth 3
         // 0: 1 -> 2
@@ -2617,7 +2618,7 @@ mod tests {
             ],
             index: (0..1).map(|x| Some(x as u32)).collect(),
         };
-        assert!(validate(t.to_ge_polyhedron(true, true), expected));
+        assert!(validate(t.to_ge_polyhedron(true, true).to_dense_polyhedron(), expected));
     }
 
     #[test]

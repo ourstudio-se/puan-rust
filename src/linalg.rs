@@ -2,7 +2,9 @@
 //! 
 //! Handy tools from linear algebra
 //! 
+use std::collections::HashMap;
 
+use itertools::Itertools;
 /// Data structure for matrix
 #[derive(Debug)]
 #[derive(Default)]
@@ -569,6 +571,43 @@ impl Matrix {
 
     pub fn update_column(&self, ind: usize, v: &Vec<f64>) -> Matrix{
         update_column(self, ind, v)
+    }
+}
+
+
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct CsrMatrix {
+    /// The value for an index `i` in `row` is representing a row index in a virtual matrix
+    pub row: Vec<i64>,
+    /// The value for an index `j` in `col` is representing a column index in a virtual matrix
+    pub col: Vec<i64>,
+    /// The value for an element is the value for the cell (`i`,`j`) in a virtual matrix
+    pub val: Vec<f64>
+}
+
+impl CsrMatrix {
+
+    /// Converts into an ordinary Matrix
+    pub fn to_matrix(&self) -> Matrix {
+        let unique_rows: Vec<&i64> = self.row.iter().unique().sorted().collect_vec();
+        let unique_cols: Vec<&i64> = self.col.iter().unique().sorted().collect_vec();
+        let n_unique_rows = unique_rows.len();
+        let m_unique_cols = unique_cols.len();
+
+        let rows_map: HashMap<&i64, usize> = unique_rows.into_iter().zip(0..n_unique_rows).collect();
+        let cols_map: HashMap<&i64, usize> = unique_cols.into_iter().zip(0..m_unique_cols).collect();
+
+        let mut val: Vec<f64> = vec![0.0; n_unique_rows*m_unique_cols];
+        for (i,(j,v)) in self.row.iter().zip(self.col.iter().zip(self.val.iter())) {
+            let i_mapped = rows_map.get(i).expect("could not find row i in mapping");
+            let j_mapped = cols_map.get(j).expect("could not find col j in mapping");
+            val[((*i_mapped as usize) * m_unique_cols) + (*j_mapped)] = *v;
+        }
+        Matrix {
+            nrows: n_unique_rows,
+            ncols: m_unique_cols,
+            val: val,
+        }
     }
 }
 
