@@ -276,6 +276,7 @@ impl Theory {
     /// use puanrs::Sign;
     /// use puanrs::AtLeast;
     /// use puanrs::polyopt::Variable;
+    /// use std::collections::HashMap;
     /// let theory: Theory = Theory {
     ///    id          : String::from("A"),
     ///    statements  : vec![
