@@ -265,6 +265,137 @@ impl Theory {
         }).collect();
     }
 
+    /// Propagates all information bottoms-up in the Theory and compiles
+    /// into a HashMap from variable id to bounds.
+    ///
+    /// # Example:
+    /// 
+    /// ```
+    /// use puanrs::Theory;
+    /// use puanrs::Statement;
+    /// use puanrs::Sign;
+    /// use puanrs::AtLeast;
+    /// use puanrs::polyopt::Variable;
+    /// let theory: Theory = Theory {
+    ///    id          : String::from("A"),
+    ///    statements  : vec![
+    ///        Statement {
+    ///            variable    : Variable {
+    ///              id      : 0,
+    ///              bounds  : (0,1),
+    ///            },
+    ///            expression  : Some(
+    ///                AtLeast {
+    ///                    ids     : vec![1,2],
+    ///                    bias    : -1,
+    ///                    sign    : Sign::Positive
+    ///                }
+    ///            )
+    ///       },
+    ///       Statement {
+    ///           variable    : Variable {
+    ///               id      : 1,
+    ///               bounds  : (0,1),
+    ///           },
+    ///           expression  : None
+    ///       },
+    ///       Statement {
+    ///           variable    : Variable {
+    ///               id      : 2,
+    ///               bounds  : (1,1),
+    ///           },
+    ///           expression  : None
+    ///       },
+    ///    ]
+    /// };
+    /// let actual: HashMap<u32, (i64, i64)> = theory.propagate();
+    /// let expected: HashMap<u32, (i64, i64)> = vec![
+    ///     (0, (1,1)),
+    ///     (1, (0,1)),
+    ///     (2, (1,1)),
+    /// ].into_iter().collect();
+    /// assert_eq!(actual, expected);
+    /// ```
+    /// 
+    pub fn propagate(&self) -> HashMap<u32, (i64, i64)> {
+
+        // We add the primitive variables directly to the
+        // result since they are already propagated.
+        let mut variable_bounds: HashMap<u32, (i64, i64)> = self.statements
+            .iter()
+            .filter(|statement| statement.expression.is_none())
+            .map(|statement| (statement.variable.id, statement.variable.bounds))
+            .collect();
+        let statements_hm: HashMap<u32, &Statement> = self._statement_hm();
+
+        // We don't need to iterate over all primitive variables since
+        // they are already propagated.
+        let mut queue: Vec<u32> = self.statements
+            .iter()
+            .filter(|statement| statement.expression.is_some())
+            .map(|statement| statement.variable.id)
+            .collect();
+
+        // Popping from of queue until it is empty
+        while let Some(id) = queue.pop() {
+
+            if let Some(statement) = statements_hm.get(&id) {
+
+                if let Some(expression) = &statement.expression {
+
+                    // Check if all ids in expression is set in variable_bounds (has been propagated)
+                    if let Some(bounds) = expression.ids.iter().map(|id| variable_bounds.get(id)).collect::<Option<Vec<&(i64, i64)>>>() {
+    
+                        // Get bounds for expression
+                        let bounds_expression: (i64, i64) = bounds.iter().fold((0,0), |acc, bound| {
+                            match expression.sign {
+                                
+                                // This is simply adding all children bounds together if
+                                // the sign is positive, e.g. x + y + z -1 >= 0 should resolve into
+                                // [0,1]+[0,1]+[0,1] -1 >= 0 == [-1,2] >= 0 == [0,1]
+                                Sign::Positive => (acc.0 +bound.0, acc.1 + bound.1),
+
+                                // NOTE HERE that if the sign is negative we do not only
+                                // subtract the bound but we also flip the bounds, e.g.
+                                // -x -y -z +1 >= 0 should resolve into [-1,0]+[-1,0]+[-1,0]+1 >= 0 == [-2,1] >= 0 == [0,1]
+                                Sign::Negative => (acc.0 - bound.1, acc.1 - bound.0),
+                            }
+                        });
+
+                        // Update variable bounds
+                        variable_bounds.insert(
+                            statement.variable.id,
+                            (
+                                (bounds_expression.0 + expression.bias >= 0) as i64,
+                                (bounds_expression.1 + expression.bias >= 0) as i64, 
+                            )
+                        );
+    
+                    } else {
+
+                        // If we don't check that it actually exists in statements map
+                        // we know that we will never be able to propagate fully and we
+                        // will end up in an infinite loop.
+                        if !statements_hm.contains_key(&id) {
+                            panic!("statement id `{id}` does not exist in statements hash map");
+                        }
+
+                        // But if it does exists, we will eventually be able to propagate
+                        // it so we put it back in the queue.
+                        queue.push(id);
+                    }
+
+                } else {
+                    variable_bounds.insert(statement.variable.id, statement.variable.bounds);
+                }
+
+            }
+
+        }
+
+        return variable_bounds;
+    }
+
     /// Transforms all Statements in Theory into GeLineq's such that 
     /// if all GeLineq's are true <-> Theory is true.
     ///
@@ -582,6 +713,49 @@ mod tests {
             }
             return res + self.bias >= 0;
         }
+    }
+
+    #[test]
+    fn test_theory_propagate() {
+        let theory: Theory = Theory {
+            id          : String::from("A"),
+            statements  : vec![
+                Statement {
+                    variable    : Variable {
+                        id      : 0,
+                        bounds  : (0,1),
+                    },
+                    expression  : Some(
+                        AtLeast {
+                            ids     : vec![1,2],
+                            bias    : -1,
+                            sign    : Sign::Positive
+                        }
+                    )
+                },
+                Statement {
+                    variable    : Variable {
+                        id      : 1,
+                        bounds  : (0,1),
+                    },
+                    expression  : None
+                },
+                Statement {
+                    variable    : Variable {
+                        id      : 2,
+                        bounds  : (1,1),
+                    },
+                    expression  : None
+                },
+            ]
+        };
+        let actual: HashMap<u32, (i64, i64)> = theory.propagate();
+        let expected: HashMap<u32, (i64, i64)> = vec![
+            (0, (1,1)),
+            (1, (0,1)),
+            (2, (1,1)),
+        ].into_iter().collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
